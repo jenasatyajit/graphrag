@@ -1,4 +1,4 @@
-"""Tests for Phase 0 API construction and common HTTP behavior."""
+"""Tests for API construction, health, errors, and Phase 1 query flow."""
 
 from __future__ import annotations
 
@@ -11,31 +11,44 @@ from src.api.main import create_app
 
 
 def test_create_app_and_health_check(client: TestClient) -> None:
-    """The Phase 0 health endpoint should expose pending dependency states."""
     response = client.get("/health")
 
     assert response.status_code == 200
     assert response.json()["status"] == "degraded"
-    assert {item["name"] for item in response.json()["components"]} == {"qdrant", "neo4j"}
+    assert {item["name"] for item in response.json()["components"]} == {
+        "qdrant",
+        "neo4j",
+        "embedding_service",
+    }
+
+
+def test_post_query_returns_spec_response_shape(client: TestClient) -> None:
+    response = client.post(
+        "/query",
+        json={"question": "Who approves large expenses?", "conversation_id": None},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"] == "Managers approve expenses above $500 [1]."
+    assert payload["citations"][0]["source_tier"] == "internal"
+    assert payload["citations"][0]["reference"]["doc_title"] == "Expense Approval SOP"
+    assert payload["used_web_search"] is False
+    assert payload["version_warning"] is None
+    assert payload["tool_trace"] == ["internal_search"]
 
 
 def test_request_id_is_generated_and_echoed(client: TestClient) -> None:
-    """Every response should include the request correlation identifier."""
     response = client.get("/health")
-
-    assert response.status_code == 200
     assert response.headers["X-Request-ID"]
 
 
 def test_caller_request_id_is_preserved(client: TestClient) -> None:
-    """A caller-provided request ID should be echoed unchanged."""
     response = client.get("/health", headers={"X-Request-ID": "request-123"})
-
     assert response.headers["X-Request-ID"] == "request-123"
 
 
 def test_domain_error_uses_uniform_envelope(settings: Settings) -> None:
-    """Domain errors should be safe, typed, and correlated to the request."""
     app: FastAPI = create_app(settings)
 
     @app.get("/test-not-found")

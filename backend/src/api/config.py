@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import AnyHttpUrl, Field, SecretStr
@@ -41,6 +42,22 @@ class Settings(BaseSettings):
 
     embedding_service_url: AnyHttpUrl | None = None
     embedding_service_token: SecretStr | None = None
+    embedding_dimension: int = Field(default=1024, gt=0)
+    embedding_batch_size: int = Field(default=32, gt=0, le=256)
+    embedding_request_timeout_seconds: float = Field(default=30.0, gt=0)
+    embedding_inference_timeout_seconds: float = Field(default=90.0, gt=0)
+    embedding_max_retries: int = Field(default=3, gt=0, le=10)
+    embedding_device: str = "cuda:0"
+    embedding_use_fp16: bool = True
+    qdrant_collection_name: str = "company_knowledge"
+    qdrant_dense_vector_name: str = "dense"
+    qdrant_sparse_vector_name: str = "sparse"
+    retrieval_top_k: int = Field(default=10, gt=0, le=100)
+    llm_synth_max_tokens: int = Field(default=4096, gt=0)
+    llm_request_timeout_seconds: float = Field(default=60.0, gt=0)
+    llm_max_retries: int = Field(default=3, gt=0, le=10)
+    ingestion_data_dir: Path = Path("data/raw")
+    ingestion_summary_path: Path = Path("data/processed/last_ingestion.json")
     docling_vlm_url: AnyHttpUrl | None = None
     docling_vlm_token: SecretStr | None = None
     docling_vlm_model: str | None = None
