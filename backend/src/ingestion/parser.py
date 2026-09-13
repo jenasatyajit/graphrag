@@ -15,6 +15,8 @@ from src.api.errors import IngestionError
 
 DocType = Literal["SOP", "product_info"]
 
+SUPPORTED_SUFFIXES: frozenset[str] = frozenset({".pdf", ".docx", ".md"})
+
 
 class ParsedTextBlock(BaseModel):
     """A narrative text item with its source-page provenance."""
@@ -49,13 +51,14 @@ def _default_converter() -> _Converter:
 
 
 class DocumentParser:
-    """Convert PDF/DOCX documents into narrative blocks using Docling.
+    """Convert PDF/DOCX/Markdown documents into narrative blocks using Docling.
 
-    Tables and pictures are deliberately omitted until Phase 4. A converter can
-    be injected so unit tests never initialize Docling or download model assets.
+    Tables and pictures are deliberately omitted until Phase 4. Markdown has no
+    page layout, so ``page_number`` stays ``None`` for those chunks. A converter
+    can be injected so unit tests never initialize Docling or download models.
     """
 
-    _SUPPORTED_SUFFIXES = frozenset({".pdf", ".docx"})
+    _SUPPORTED_SUFFIXES = SUPPORTED_SUFFIXES
 
     def __init__(self, converter_factory: Callable[[], _Converter] = _default_converter) -> None:
         self._converter_factory = converter_factory

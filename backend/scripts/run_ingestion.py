@@ -16,7 +16,7 @@ from src.api.schemas import IngestionSummary
 from src.indexing.embeddings import InProcessBGEM3
 from src.indexing.vector_store import VectorStore
 from src.ingestion.chunker import DocumentChunker
-from src.ingestion.parser import DocType, DocumentParser
+from src.ingestion.parser import SUPPORTED_SUFFIXES, DocType, DocumentParser
 
 logger = structlog.get_logger(__name__)
 
@@ -48,7 +48,7 @@ async def run_ingestion(
         sources = sorted(
             path
             for path in settings.ingestion_data_dir.iterdir()
-            if path.is_file() and path.suffix.lower() in {".pdf", ".docx"}
+            if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
         )
         for source in sources:
             try:

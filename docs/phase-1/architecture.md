@@ -4,7 +4,7 @@
 
 ```text
 GPU VM ingestion
-PDF/DOCX -> Docling text items -> SOP step chunker -> BGE-M3 dense+sparse
+PDF/DOCX/MD -> Docling text items -> SOP step chunker -> BGE-M3 dense+sparse
                                                       |
                                                       v
                                                 Qdrant Cloud

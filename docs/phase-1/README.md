@@ -2,7 +2,7 @@
 
 ## Overview
 
-Phase 1 provides the working safety-net pipeline: PDF/DOCX narrative text is parsed on the GPU VM, chunked by SOP step, embedded with BGE-M3, stored in Qdrant Cloud, retrieved with dense similarity, and answered by Sarvam-105B with strict `[n]` citations. Any uncited generated claim is removed before the API responds.
+Phase 1 provides the working safety-net pipeline: PDF/DOCX/Markdown narrative text is parsed on the GPU VM, chunked by SOP step, embedded with BGE-M3, stored in Qdrant Cloud, retrieved with dense similarity, and answered by Sarvam-105B with strict `[n]` citations. Any uncited generated claim is removed before the API responds.
 
 ## Contents
 
@@ -37,7 +37,7 @@ Keep port 8081 private and set the same `EMBEDDING_SERVICE_TOKEN` on both machin
 
 ### 3. Ingest documents
 
-Place PDF/DOCX files in `backend/data/raw/`, then run on the GPU VM:
+Place `.pdf`, `.docx`, or `.md` files in `backend/data/raw/`, then run on the GPU VM (Markdown chunks have no page numbers):
 
 ```bash
 uv run python scripts/run_ingestion.py --doc-type SOP --sop-version v1.0
