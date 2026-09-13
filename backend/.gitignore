@@ -1,0 +1,21 @@
+# Local uv environment
+.venv/
+
+# Secrets
+.env
+
+# Ingested source documents and derived artifacts
+data/raw/
+data/processed/
+
+# Model caches
+hf_cache/
+huggingface_cache/
+.cache/
+
+# Python tooling artifacts
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.pyrefly/
+*.py[cod]

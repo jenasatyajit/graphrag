@@ -1,0 +1,30 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: backend ruff check
+        entry: uv --directory backend run ruff check --fix
+        language: system
+        pass_filenames: false
+      - id: ruff-format
+        name: backend ruff format
+        entry: uv --directory backend run ruff format
+        language: system
+        pass_filenames: false
+      - id: pyrefly-check
+        name: backend pyrefly check
+        entry: uv --directory backend run pyrefly check
+        language: system
+        pass_filenames: false
+      - id: uv-lock
+        name: backend uv lock check
+        entry: uv --directory backend lock --check
+        language: system
+        pass_filenames: false
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-toml
+      - id: check-yaml
