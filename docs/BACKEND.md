@@ -528,7 +528,7 @@ Record any place the implementation departs from SPEC.md, with the reason and da
 | # | Deviation from SPEC | Reason | Date |
 |---|---|---|---|
 | D-1 | Use `sarvam-105b` only (SPEC lists `sarvam-30b` in tables) | `sarvam-30b`/`sarvam-m` deprecated by Sarvam | 2026-09-13 |
-| D-2 | Default reranker `rerank-v4.0-pro` (SPEC says `rerank-v3.5`) | v4 is current SOTA; keep configurable | 2026-09-13 |
+| D-2 | Reranking via **OpenRouter `/rerank`** (model `cohere/rerank-4-fast` default; `cohere/rerank-4-pro` for eval), not Cohere's native `cohere` SDK / `/v2/rerank`. SPEC says `rerank-v3.5`. `COHERE_API_KEY` removed; auth via `OPENROUTER_API_KEY`. | v4 is current SOTA and `fast` keeps the per-query rerank hop low-latency; routing rerank through OpenRouter unifies the API/billing layer. Kept configurable via `RERANK_MODEL`. | 2026-09-14 |
 | D-3 | Image/chart captioning via **hosted Docling** `do_picture_description`/`do_chart_extraction` (OpenAI-compatible VLM), not a bespoke Sarvam Vision VLM call | Sarvam Vision is OCR/Doc-AI, not a captioning VLM; user chose hosted Docling | 2026-09-13 |
 | D-4 | BGE-M3 + Docling run on a **GPU VM**; query API embeds via an **HTTP embedding service**; ingestion runs **on the VM** in-process (SPEC implies a single service) | User's chosen topology (L40S VM); keeps API CPU-only and GPU work co-located | 2026-09-13 |
 | D-5 | Type checker is **Pyrefly** (SPEC §12 says type hints, unspecified checker) | User preference | 2026-09-13 |

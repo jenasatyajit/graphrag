@@ -44,7 +44,7 @@ Sparse indices are validated as non-negative, unique, and ascending. `InProcessB
 
 ## Ingestion behavior
 
-`run_ingestion.py` requires an explicit `--doc-type` so metadata is never guessed from filenames. It processes supported files independently, batches embeddings, writes both vector types to Qdrant, records failed filenames, and atomically replaces the last-run JSON summary. In the two-machine topology, `INGESTION_SUMMARY_PATH` must refer to a shared mount or the JSON must be copied to the API host after each run.
+Run it from `backend/` as `uv run python -m scripts.run_ingestion --doc-type <type>`. `run_ingestion.py` requires an explicit `--doc-type` so metadata is never guessed from filenames. It processes supported files independently, batches embeddings, writes both vector types to Qdrant, records failed filenames, and atomically replaces the last-run JSON summary. In the two-machine topology, `INGESTION_SUMMARY_PATH` must refer to a shared mount or the JSON must be copied to the API host after each run.
 
 ## Citation enforcement
 

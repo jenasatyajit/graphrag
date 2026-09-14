@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, Field, SecretStr
+from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     )
 
     sarvam_api_key: SecretStr = Field(min_length=1)
-    cohere_api_key: SecretStr = Field(min_length=1)
+    openrouter_api_key: SecretStr = Field(min_length=1)
     exa_api_key: SecretStr = Field(min_length=1)
     qdrant_url: AnyHttpUrl
     qdrant_api_key: SecretStr = Field(min_length=1)
@@ -33,8 +33,12 @@ class Settings(BaseSettings):
     neo4j_password: SecretStr = Field(min_length=1)
 
     embedding_model: str = "BAAI/bge-m3"
-    rerank_model: str = "rerank-v4.0-pro"
+    openrouter_base_url: AnyHttpUrl = AnyHttpUrl("https://openrouter.ai/api/v1")
+    rerank_model: str = "cohere/rerank-4-fast"
     rerank_top_n: int = Field(default=5, gt=0)
+    rerank_candidate_limit: int = Field(default=20, gt=0, le=1000)
+    rerank_request_timeout_seconds: float = Field(default=15.0, gt=0)
+    rerank_max_retries: int = Field(default=3, gt=0, le=10)
     llm_model: str = "sarvam-105b"
     llm_router_reasoning_effort: str | None = None
     llm_synth_reasoning_effort: str | None = "low"
@@ -65,6 +69,39 @@ class Settings(BaseSettings):
     conversation_history_max_turns: int = Field(default=20, gt=0)
     app_environment: Literal["development", "production", "test"] = "development"
     cors_origins_raw: str = Field(default="", validation_alias="CORS_ORIGINS")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_blank_optional_values(cls, data: Any) -> Any:
+        """Treat blank optional env values as unset so defaults apply.
+
+        A common mistake is copying ``.env.example`` and leaving optional keys
+        present but empty. An empty string cannot be parsed as an int/float/bool/
+        URL, so drop blanks for any field that has a default and let its default
+        take over. Required credential fields have no default, so a truly blank
+        value still fails with a clear "field required" error.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        optional_fields = {
+            name for name, field in cls.model_fields.items() if not field.is_required()
+        }
+        aliases = {
+            field.validation_alias: name
+            for name, field in cls.model_fields.items()
+            if isinstance(field.validation_alias, str)
+        }
+
+        cleaned: dict[Any, Any] = {}
+        for key, value in data.items():
+            field_name = aliases.get(key, key)
+            canonical = field_name.lower() if isinstance(field_name, str) else field_name
+            is_blank = isinstance(value, str) and value.strip() == ""
+            if is_blank and canonical in optional_fields:
+                continue
+            cleaned[key] = value
+        return cleaned
 
     @property
     def cors_origins(self) -> list[str]:

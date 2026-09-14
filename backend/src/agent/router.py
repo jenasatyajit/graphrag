@@ -13,6 +13,8 @@ from src.generation.provenance import GroundedAnswer
 from src.generation.synthesizer import AnswerSynthesizer
 from src.indexing.embeddings import EmbeddingProvider
 from src.indexing.vector_store import VectorStore
+from src.retrieval.hybrid_search import HybridSearchService
+from src.retrieval.reranker import Reranker
 
 logger = structlog.get_logger(__name__)
 
@@ -41,6 +43,35 @@ class NaiveRagService:
             chunk_ids=[str(candidate.chunk.chunk_id) for candidate in candidates],
         )
         return await self._synthesizer.synthesize(question, candidates)
+
+
+class HybridRagService:
+    """Phase 2 query path: hybrid retrieval, reranking, then grounded synthesis.
+
+    ``NaiveRagService`` is retained as the Phase 6 ablation baseline; this
+    service is the live query path once Phase 2 lands.
+    """
+
+    def __init__(
+        self,
+        hybrid_search: HybridSearchService,
+        reranker: Reranker,
+        synthesizer: AnswerSynthesizer,
+    ) -> None:
+        self._hybrid_search = hybrid_search
+        self._reranker = reranker
+        self._synthesizer = synthesizer
+
+    async def query(self, question: str) -> GroundedAnswer:
+        candidates = await self._hybrid_search.search(question)
+        reranked = await self._reranker.rerank(question, candidates)
+        logger.info(
+            "hybrid_rerank_completed",
+            candidate_count=len(candidates),
+            reranked_count=len(reranked),
+            chunk_ids=[str(candidate.chunk.chunk_id) for candidate in reranked],
+        )
+        return await self._synthesizer.synthesize(question, reranked)
 
 
 class IngestionStatusService:

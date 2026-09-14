@@ -20,8 +20,14 @@ From `backend/`:
 uv sync
 Copy-Item .env.example .env
 # Fill .env, including QDRANT_*, SARVAM_API_KEY, and EMBEDDING_SERVICE_URL.
-uv run uvicorn src.api.main:create_app --factory --host 127.0.0.1 --port 8000
+# Optional keys may be left out entirely; do not leave them present but blank
+# only when you want a non-default value. Blank optional keys fall back to
+# their defaults automatically.
+uv run python -m uvicorn src.api.main:create_app --factory --host 127.0.0.1 --port 8000
 ```
+
+> Run all commands from `backend/`. The `python -m` form puts the project root
+> on the import path so `src` and `scripts` resolve without extra setup.
 
 ### 2. GPU embedding service
 
@@ -29,7 +35,7 @@ On the Ubuntu GPU VM, from `backend/`:
 
 ```bash
 uv sync --group gpu
-uv run uvicorn src.indexing.embedding_service:create_embedding_service_app \
+uv run python -m uvicorn src.indexing.embedding_service:create_embedding_service_app \
   --factory --host 0.0.0.0 --port 8081
 ```
 
@@ -40,7 +46,7 @@ Keep port 8081 private and set the same `EMBEDDING_SERVICE_TOKEN` on both machin
 Place `.pdf`, `.docx`, or `.md` files in `backend/data/raw/`, then run on the GPU VM (Markdown chunks have no page numbers):
 
 ```bash
-uv run python scripts/run_ingestion.py --doc-type SOP --sop-version v1.0
+uv run python -m scripts.run_ingestion --doc-type SOP --sop-version v1.0
 ```
 
 For product documents, use `--doc-type product_info`. A run summary is written to `data/processed/last_ingestion.json`. Because ingestion and the API run on different machines, configure `INGESTION_SUMMARY_PATH` as the same shared mounted path on both hosts, or copy the completed JSON file to the API host before calling `POST /ingest`.
@@ -62,7 +68,7 @@ uv run pyrefly check
 uv run pytest
 ```
 
-Current local result: 19 tests passed; Ruff and Pyrefly are clean. Live ingestion and question checks still require real SOPs, Qdrant credentials, a Sarvam key, and the GPU embedding service.
+Ruff and Pyrefly are clean and the unit suite passes. Live ingestion and question checks still require real documents, Qdrant credentials, a Sarvam key, and the GPU embedding service.
 
 ## Tech stack
 

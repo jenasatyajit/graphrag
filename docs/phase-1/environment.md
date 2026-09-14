@@ -1,6 +1,6 @@
 # Phase 1 Environment
 
-Copy `backend/.env.example` to `backend/.env`; never commit the populated file.
+Copy `backend/.env.example` to `backend/.env`; never commit the populated file. Optional keys can be left blank or removed — a blank optional key falls back to its default rather than causing a startup error. Only the required credentials must be filled in.
 
 ## Required for the CPU query API
 

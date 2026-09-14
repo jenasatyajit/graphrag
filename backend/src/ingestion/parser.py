@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import unicodedata
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -122,8 +124,39 @@ class DocumentParser:
         )
 
 
+# Typographic characters that add no meaning for retrieval but produce noisy
+# citations. Mapped to plain ASCII equivalents after Unicode normalization.
+_PUNCTUATION_MAP = {
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2026": "...",
+    "\u00a0": " ",
+}
+
+
+def _normalize_text(text: str) -> str:
+    """Repair mojibake and normalize Unicode so chunks stay clean and citable.
+
+    Docling output occasionally contains UTF-8 bytes that were previously decoded
+    as Latin-1 (mojibake such as ``â€“``). Re-encoding through Latin-1 recovers the
+    original characters; NFC normalization and a small punctuation map then keep
+    stored chunks and citations readable.
+    """
+    if any(marker in text for marker in ("\u00c3", "\u00e2\u0080")):
+        with contextlib.suppress(UnicodeEncodeError, UnicodeDecodeError):
+            text = text.encode("latin-1").decode("utf-8")
+    text = unicodedata.normalize("NFC", text)
+    for source, target in _PUNCTUATION_MAP.items():
+        text = text.replace(source, target)
+    return text
+
+
 def _to_text_block(item: Any) -> ParsedTextBlock | None:
-    text = str(getattr(item, "text", "")).strip()
+    text = _normalize_text(str(getattr(item, "text", ""))).strip()
     if not text:
         return None
 

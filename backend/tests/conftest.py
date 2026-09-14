@@ -20,7 +20,7 @@ from src.ingestion.chunker import Chunk
 
 class TestSettingsValues(TypedDict):
     sarvam_api_key: str
-    cohere_api_key: str
+    openrouter_api_key: str
     exa_api_key: str
     qdrant_url: str
     qdrant_api_key: str
@@ -33,7 +33,7 @@ class TestSettingsValues(TypedDict):
 def settings_values() -> TestSettingsValues:
     return {
         "sarvam_api_key": "test-sarvam-key",
-        "cohere_api_key": "test-cohere-key",
+        "openrouter_api_key": "test-openrouter-key",
         "exa_api_key": "test-exa-key",
         "qdrant_url": "https://qdrant.example.test",
         "qdrant_api_key": "test-qdrant-key",
@@ -69,11 +69,32 @@ class FakeVectorStore:
         del query_vector, limit
         return [self.source]
 
+    async def hybrid_search(
+        self,
+        query_dense: Sequence[float],
+        query_sparse: object,
+        *,
+        limit: int | None = None,
+        prefetch_limit: int | None = None,
+    ) -> list[RetrievedChunk]:
+        del query_dense, query_sparse, limit, prefetch_limit
+        return [self.source]
+
     async def verify_connectivity(self) -> ComponentHealth:
         return ComponentHealth(name="qdrant", status="ok")
 
     async def close(self) -> None:
         self.closed = True
+
+
+class FakeReranker:
+    async def rerank(
+        self,
+        query: str,
+        candidates: Sequence[RetrievedChunk],
+    ) -> list[RetrievedChunk]:
+        del query
+        return list(candidates)
 
 
 class FakeGraphStore:
@@ -125,6 +146,7 @@ def client(
         graph_store=cast(Any, FakeGraphStore()),
         embedding_provider=FakeEmbeddingProvider(),
         completion_provider=FakeCompletionProvider(),
+        reranker=FakeReranker(),
     )
     with TestClient(app) as test_client:
         yield test_client

@@ -11,15 +11,22 @@ from qdrant_client import AsyncQdrantClient, models
 from src.api.config import Settings
 from src.api.errors import RetrievalError
 from src.api.schemas import ComponentHealth
-from src.indexing.embeddings import EmbeddingResponse
+from src.indexing.embeddings import EmbeddingResponse, SparseEmbedding
 from src.ingestion.chunker import Chunk
 
 
 class RetrievedChunk(BaseModel):
-    """A chunk returned by vector retrieval with its similarity score."""
+    """A chunk returned by retrieval with fusion and optional rerank scores.
+
+    ``score`` is the retriever score (dense similarity, or the RRF fusion score
+    for hybrid search). ``rerank_score`` is the reranker relevance score when a
+    reranker has processed the candidate; it stays ``None`` on the RRF-only
+    fallback path so downstream logging can tell the two apart.
+    """
 
     chunk: Chunk
     score: float
+    rerank_score: float | None = None
 
 
 class VectorStore:
@@ -136,6 +143,59 @@ class VectorStore:
             raise
         except Exception as exc:
             raise RetrievalError("Qdrant dense retrieval failed.") from exc
+
+    async def hybrid_search(
+        self,
+        query_dense: Sequence[float],
+        query_sparse: SparseEmbedding,
+        *,
+        limit: int | None = None,
+        prefetch_limit: int | None = None,
+    ) -> list[RetrievedChunk]:
+        """Fuse dense and sparse candidates with server-side RRF.
+
+        Each modality is prefetched independently, then Qdrant merges the two
+        ranked lists with Reciprocal Rank Fusion and returns the top ``limit``
+        candidates. ``score`` on each result is the RRF fusion score.
+        """
+        if len(query_dense) != self._settings.embedding_dimension:
+            raise RetrievalError("Query embedding dimension is invalid.")
+        fused_limit = limit or self._settings.rerank_candidate_limit
+        branch_limit = prefetch_limit or max(fused_limit * 2, fused_limit)
+        try:
+            response = await self._client.query_points(
+                collection_name=self._settings.qdrant_collection_name,
+                prefetch=[
+                    models.Prefetch(
+                        query=list(query_dense),
+                        using=self._settings.qdrant_dense_vector_name,
+                        limit=branch_limit,
+                    ),
+                    models.Prefetch(
+                        query=models.SparseVector(
+                            indices=query_sparse.indices,
+                            values=query_sparse.values,
+                        ),
+                        using=self._settings.qdrant_sparse_vector_name,
+                        limit=branch_limit,
+                    ),
+                ],
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=fused_limit,
+                with_payload=True,
+            )
+            return [
+                RetrievedChunk(
+                    chunk=Chunk.model_validate(point.payload),
+                    score=float(point.score),
+                )
+                for point in response.points
+                if point.payload is not None
+            ]
+        except RetrievalError:
+            raise
+        except Exception as exc:
+            raise RetrievalError("Qdrant hybrid retrieval failed.") from exc
 
     async def verify_connectivity(self) -> ComponentHealth:
         """Return a safe health result for Qdrant Cloud."""
