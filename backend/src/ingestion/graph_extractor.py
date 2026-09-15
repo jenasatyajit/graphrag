@@ -55,8 +55,11 @@ class GraphExtractor:
                 user_prompt=self._build_user_prompt(chunk),
             )
         except LLMError:
+            # Empty/failed reply for this chunk. Ingestion continues; a content
+            # -rich chunk landing here repeatedly signals reasoning_effort is
+            # too low or the extraction prompt needs tuning (not an outage).
             logger.warning(
-                "graph_extraction_llm_unavailable",
+                "graph_extraction_empty_reply",
                 chunk_id=str(chunk.chunk_id),
             )
             return []
