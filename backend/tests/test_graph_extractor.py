@@ -8,6 +8,7 @@ from uuid import UUID
 import pytest
 
 from src.api.config import Settings
+from src.api.errors import LLMError
 from src.generation.synthesizer import CompletionResult
 from src.indexing.graph_schema import GraphTriple, is_allowed_edge
 from src.ingestion.chunker import Chunk
@@ -167,6 +168,25 @@ async def test_extractor_returns_empty_on_garbage() -> None:
     )
 
     triples = await extractor.extract(_chunk("Some text."))
+
+    assert triples == []
+
+
+class FailingCompletionProvider:
+    """Simulates Sarvam returning an empty answer for a chunk."""
+
+    async def complete(self, *, system_prompt: str, user_prompt: str) -> CompletionResult:
+        del system_prompt, user_prompt
+        raise LLMError("Sarvam returned an empty answer.")
+
+
+@pytest.mark.asyncio
+async def test_extractor_tolerates_llm_failure_without_raising() -> None:
+    # One chunk's LLM failure must not abort ingestion; it degrades to no
+    # triples for that chunk (regression test for document-level crash).
+    extractor = GraphExtractor(_settings(), completion_provider=FailingCompletionProvider())
+
+    triples = await extractor.extract(_chunk("A heading with no facts."))
 
     assert triples == []
 

@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from src.agent.prompts import GRAPH_EXTRACTION_SYSTEM_PROMPT
 from src.api.config import Settings
+from src.api.errors import LLMError
 from src.generation.synthesizer import CompletionProvider, SarvamCompletionProvider
 from src.indexing.graph_schema import GraphNode, GraphTriple
 from src.ingestion.chunker import Chunk
@@ -43,14 +44,22 @@ class GraphExtractor:
     async def extract(self, chunk: Chunk) -> list[GraphTriple]:
         """Extract validated triples for one chunk.
 
-        Never raises on a malformed or off-schema model response: a bad chunk
-        yields an empty list and is logged, so one noisy chunk cannot abort the
-        whole ingestion batch.
+        Never raises on a malformed, empty, or off-schema model response: a bad
+        chunk yields an empty list and is logged, so one noisy chunk cannot
+        abort the whole ingestion batch. An empty reply is a normal outcome for
+        chunks with no extractable facts (headings, overviews).
         """
-        completion = await self._provider.complete(
-            system_prompt=GRAPH_EXTRACTION_SYSTEM_PROMPT,
-            user_prompt=self._build_user_prompt(chunk),
-        )
+        try:
+            completion = await self._provider.complete(
+                system_prompt=GRAPH_EXTRACTION_SYSTEM_PROMPT,
+                user_prompt=self._build_user_prompt(chunk),
+            )
+        except LLMError:
+            logger.warning(
+                "graph_extraction_llm_unavailable",
+                chunk_id=str(chunk.chunk_id),
+            )
+            return []
         raw_triples = _parse_triples_payload(completion.text)
         triples: list[GraphTriple] = []
         dropped = 0
