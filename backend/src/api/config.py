@@ -42,7 +42,16 @@ class Settings(BaseSettings):
     llm_model: str = "sarvam-105b"
     llm_router_reasoning_effort: str | None = None
     llm_synth_reasoning_effort: str | None = "low"
+    llm_extract_reasoning_effort: str | None = None
+    llm_extract_max_tokens: int = Field(default=2048, gt=0)
     max_agent_iterations: int = Field(default=3, gt=0)
+
+    neo4j_database: str = "neo4j"
+    graph_query_timeout_seconds: float = Field(default=15.0, gt=0)
+    graph_max_retries: int = Field(default=3, gt=0, le=10)
+    graph_traversal_max_hops: int = Field(default=2, ge=1, le=3)
+    graph_entity_match_limit: int = Field(default=10, gt=0, le=100)
+    graph_fact_limit: int = Field(default=15, gt=0, le=100)
 
     embedding_service_url: AnyHttpUrl | None = None
     embedding_service_token: SecretStr | None = None

@@ -21,6 +21,7 @@ from src.generation.synthesizer import AnswerSynthesizer, SarvamCompletionProvid
 from src.indexing.embeddings import HttpEmbeddingClient, close_embedding_provider
 from src.indexing.graph_store import GraphStore
 from src.indexing.vector_store import VectorStore
+from src.retrieval.graph_search import GraphSearchService
 from src.retrieval.hybrid_search import HybridSearchService
 from src.retrieval.reranker import OpenRouterReranker, Reranker
 
@@ -52,9 +53,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger = structlog.get_logger(__name__)
     logger.info("application_started", environment=settings.app_environment)
     try:
+        # Best-effort graph connect: a graph outage must not stop the app from
+        # serving vector-only answers, so failures are logged, not raised.
+        try:
+            await app.state.graph_store.connect()
+        except Exception:
+            logger.warning("graph_store_connect_failed", exc_info=True)
         yield
     finally:
         await app.state.vector_store.close()
+        await app.state.graph_store.close()
         embedder = app.state.embedding_provider
         if embedder is not None:
             await close_embedding_provider(embedder)
@@ -92,6 +100,12 @@ def create_app(
     active_reranker = reranker or OpenRouterReranker(active_settings)
     active_completion_provider = completion_provider or SarvamCompletionProvider(active_settings)
     synthesizer = AnswerSynthesizer(active_completion_provider)
+    entity_extractor = completion_provider or SarvamCompletionProvider(
+        active_settings,
+        reasoning_effort=active_settings.llm_extract_reasoning_effort,
+        max_tokens=active_settings.llm_extract_max_tokens,
+    )
+    graph_search = GraphSearchService(active_graph_store, entity_extractor)
 
     app = FastAPI(
         title="Graph-Augmented Multimodal Company-Knowledge QA API",
@@ -112,6 +126,7 @@ def create_app(
             hybrid_search,
             active_reranker,
             synthesizer,
+            graph_search,
         )
     app.state.ingestion_status = IngestionStatusService(active_settings.ingestion_summary_path)
 

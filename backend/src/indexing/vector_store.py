@@ -197,6 +197,27 @@ class VectorStore:
         except Exception as exc:
             raise RetrievalError("Qdrant hybrid retrieval failed.") from exc
 
+    async def mark_superseded(self, chunk_ids: Sequence[str]) -> int:
+        """Flip ``is_current_version`` to false for the given chunk ids.
+
+        Keeps the vector store consistent with the graph's SOP version chain so
+        a superseded chunk retrieved at query time correctly triggers the
+        version warning. Returns the number of chunk ids requested.
+        """
+        ids = [chunk_id for chunk_id in chunk_ids if chunk_id]
+        if not ids:
+            return 0
+        try:
+            await self._client.set_payload(
+                collection_name=self._settings.qdrant_collection_name,
+                payload={"is_current_version": False},
+                points=models.PointIdsList(points=list(ids)),
+                wait=True,
+            )
+        except Exception as exc:
+            raise RetrievalError("Qdrant could not update version flags.") from exc
+        return len(ids)
+
     async def verify_connectivity(self) -> ComponentHealth:
         """Return a safe health result for Qdrant Cloud."""
         try:

@@ -13,6 +13,7 @@ from src.generation.provenance import GroundedAnswer
 from src.generation.synthesizer import AnswerSynthesizer
 from src.indexing.embeddings import EmbeddingProvider
 from src.indexing.vector_store import VectorStore
+from src.retrieval.graph_search import GraphSearchService
 from src.retrieval.hybrid_search import HybridSearchService
 from src.retrieval.reranker import Reranker
 
@@ -46,10 +47,13 @@ class NaiveRagService:
 
 
 class HybridRagService:
-    """Phase 2 query path: hybrid retrieval, reranking, then grounded synthesis.
+    """Live query path: hybrid retrieval + rerank + graph facts, then synthesis.
 
-    ``NaiveRagService`` is retained as the Phase 6 ablation baseline; this
-    service is the live query path once Phase 2 lands.
+    Phase 3 fuses knowledge-graph facts alongside the reranked vector chunks.
+    Graph search runs unconditionally on every query and degrades to an empty
+    fact list on any failure, so a graph outage lowers answer quality without
+    breaking retrieval. ``NaiveRagService`` remains the Phase 6 ablation
+    baseline.
     """
 
     def __init__(
@@ -57,21 +61,25 @@ class HybridRagService:
         hybrid_search: HybridSearchService,
         reranker: Reranker,
         synthesizer: AnswerSynthesizer,
+        graph_search: GraphSearchService | None = None,
     ) -> None:
         self._hybrid_search = hybrid_search
         self._reranker = reranker
         self._synthesizer = synthesizer
+        self._graph_search = graph_search
 
     async def query(self, question: str) -> GroundedAnswer:
         candidates = await self._hybrid_search.search(question)
         reranked = await self._reranker.rerank(question, candidates)
+        graph_facts = await self._graph_search.search(question) if self._graph_search else []
         logger.info(
             "hybrid_rerank_completed",
             candidate_count=len(candidates),
             reranked_count=len(reranked),
+            graph_fact_count=len(graph_facts),
             chunk_ids=[str(candidate.chunk.chunk_id) for candidate in reranked],
         )
-        return await self._synthesizer.synthesize(question, reranked)
+        return await self._synthesizer.synthesize(question, reranked, graph_facts=graph_facts)
 
 
 class IngestionStatusService:

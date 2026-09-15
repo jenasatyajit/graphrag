@@ -13,7 +13,8 @@ from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait
 
 from src.api.config import Settings
 from src.api.errors import LLMError
-from src.generation.provenance import GroundedAnswer, ground_internal_answer
+from src.generation.provenance import CitableSource, GroundedAnswer, ground_internal_answer
+from src.indexing.graph_schema import GraphFact
 from src.indexing.vector_store import RetrievedChunk
 
 logger = structlog.get_logger(__name__)
@@ -23,6 +24,13 @@ For every factual claim, add one or more citation markers like [1] or [2] refere
 numbered source list. If a claim cannot be supported by the context, omit it. If the
 context is insufficient, say so explicitly rather than guessing. Never use your own
 knowledge as evidence."""
+
+
+class _Unset:
+    """Sentinel marking an unsupplied optional argument (distinct from ``None``)."""
+
+
+_UNSET = _Unset()
 
 
 class CompletionResult(BaseModel):
@@ -40,10 +48,24 @@ class CompletionProvider(Protocol):
 class SarvamCompletionProvider:
     """Small resilient boundary around the async Sarvam SDK."""
 
-    def __init__(self, settings: Settings, *, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        client: Any | None = None,
+        reasoning_effort: str | _Unset | None = _UNSET,
+        max_tokens: int | None = None,
+    ) -> None:
         self._model = settings.llm_model
-        self._reasoning_effort = settings.llm_synth_reasoning_effort
-        self._max_tokens = settings.llm_synth_max_tokens
+        # ``reasoning_effort`` defaults to the synthesis setting but can be
+        # overridden (e.g. ``None`` to disable reasoning for extraction calls).
+        # A sentinel distinguishes "not provided" from an explicit ``None``.
+        self._reasoning_effort = (
+            settings.llm_synth_reasoning_effort
+            if isinstance(reasoning_effort, _Unset)
+            else reasoning_effort
+        )
+        self._max_tokens = max_tokens or settings.llm_synth_max_tokens
         self._max_retries = settings.llm_max_retries
         self._client = client or AsyncSarvamAI(
             api_subscription_key=settings.sarvam_api_key.get_secret_value(),
@@ -105,25 +127,36 @@ class AnswerSynthesizer:
         self,
         question: str,
         sources: list[RetrievedChunk],
+        *,
+        graph_facts: list[GraphFact] | None = None,
     ) -> GroundedAnswer:
-        if not sources:
+        # Reranked chunks are numbered first (they carry the rerank ordering);
+        # graph facts are appended after as additional citable sources. Graph
+        # facts bypass the reranker deliberately - they are already precise,
+        # structured triples, so spending rerank budget on them adds latency
+        # without improving ordering.
+        citable: list[CitableSource] = [CitableSource.from_chunk(source) for source in sources]
+        citable.extend(CitableSource.from_graph_fact(fact) for fact in (graph_facts or []))
+
+        if not citable:
             return GroundedAnswer(
                 answer="The provided context is insufficient to answer this question.",
                 citations=[],
             )
 
         context = "\n\n".join(
-            f"[{index}] Document: {source.chunk.doc_title}\n{source.chunk.text}"
-            for index, source in enumerate(sources, start=1)
+            f"[{index}] Document: {source.doc_title}\n{source.text}"
+            for index, source in enumerate(citable, start=1)
         )
         completion = await self._completion_provider.complete(
             system_prompt=SYNTHESIS_SYSTEM_PROMPT,
             user_prompt=f"Question:\n{question.strip()}\n\nNumbered sources:\n{context}",
         )
-        grounded = ground_internal_answer(completion.text, sources)
+        grounded = ground_internal_answer(completion.text, citable)
         logger.info(
             "answer_synthesized",
             source_count=len(sources),
+            graph_fact_count=len(graph_facts or []),
             citation_count=len(grounded.citations),
             flagged_claim_count=len(grounded.flagged_claims),
             input_tokens=completion.input_tokens,

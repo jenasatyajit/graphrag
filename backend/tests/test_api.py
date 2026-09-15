@@ -14,12 +14,16 @@ def test_create_app_and_health_check(client: TestClient) -> None:
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "degraded"
+    # Phase 3: the graph store reports a real "ok" status, so with all fake
+    # dependencies healthy the aggregate health is "ok".
+    assert response.json()["status"] == "ok"
     assert {item["name"] for item in response.json()["components"]} == {
         "qdrant",
         "neo4j",
         "embedding_service",
     }
+    neo4j = next(c for c in response.json()["components"] if c["name"] == "neo4j")
+    assert neo4j["status"] == "ok"
 
 
 def test_post_query_returns_spec_response_shape(client: TestClient) -> None:

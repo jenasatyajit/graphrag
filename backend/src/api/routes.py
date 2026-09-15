@@ -43,7 +43,7 @@ async def query(payload: QueryRequest, request: Request) -> QueryResponse:
         answer=grounded.answer,
         citations=grounded.citations,
         used_web_search=False,
-        version_warning=None,
+        version_warning=getattr(grounded, "version_warning", None),
         tool_trace=["internal_search"],
     )
 

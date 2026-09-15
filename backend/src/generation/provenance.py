@@ -1,4 +1,12 @@
-"""Strict Phase 1 citation validation and provenance processing."""
+"""Strict citation validation and provenance processing.
+
+Phase 3 adds graph-derived facts as citable sources. Both vector chunks and
+graph facts are normalized to a :class:`CitableSource` so the grounding logic
+stays uniform: a claim survives only if it carries a ``[n]`` marker pointing at
+a real source, and every kept claim gets a chunk-based citation (graph facts
+cite the source chunk they were extracted from). A version warning is derived
+when any cited source is a superseded SOP.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +15,7 @@ import re
 from pydantic import BaseModel, Field
 
 from src.api.schemas import Citation, CitationReference
+from src.indexing.graph_schema import GraphFact
 from src.indexing.vector_store import RetrievedChunk
 
 _CITATION_RE = re.compile(r"\[(\d+)]")
@@ -19,15 +28,71 @@ _INSUFFICIENT_PREFIXES = (
 )
 
 
+class CitableSource(BaseModel):
+    """A numbered source the synthesizer can cite, from a chunk or a graph fact.
+
+    Both source kinds resolve to a chunk-based citation (decision: chunk-based
+    citations via node ``chunk_ids``), so ``chunk_id`` is populated for graph
+    facts from the fact's originating chunk when one is known.
+    """
+
+    text: str
+    doc_title: str
+    chunk_id: str | None = None
+    sop_version: str | None = None
+    is_current_version: bool = True
+    origin: str = "internal_chunk"
+
+    @classmethod
+    def from_chunk(cls, retrieved: RetrievedChunk) -> CitableSource:
+        chunk = retrieved.chunk
+        return cls(
+            text=chunk.text,
+            doc_title=chunk.doc_title,
+            chunk_id=str(chunk.chunk_id),
+            sop_version=chunk.sop_version,
+            is_current_version=chunk.is_current_version,
+            origin="internal_chunk",
+        )
+
+    @classmethod
+    def from_graph_fact(cls, fact: GraphFact) -> CitableSource:
+        return cls(
+            text=fact.as_text(),
+            doc_title="Knowledge graph",
+            chunk_id=fact.chunk_ids[0] if fact.chunk_ids else None,
+            sop_version=None,
+            is_current_version=True,
+            origin="graph_fact",
+        )
+
+
 class GroundedAnswer(BaseModel):
     """Validated answer after unsupported claims have been removed."""
 
     answer: str
     citations: list[Citation]
     flagged_claims: list[str] = Field(default_factory=list)
+    version_warning: str | None = None
 
 
-def ground_internal_answer(raw_answer: str, sources: list[RetrievedChunk]) -> GroundedAnswer:
+def build_version_warning(citations: list[Citation]) -> str | None:
+    """Return a warning if any cited internal source is a superseded SOP."""
+    outdated = {
+        citation.reference.doc_title
+        for citation in citations
+        if citation.reference.is_current_version is False
+    }
+    if not outdated:
+        return None
+    titles = ", ".join(sorted(outdated))
+    return (
+        f"Note: the answer references a superseded version of {titles}. "
+        "A newer version of this document exists; verify against the current SOP."
+    )
+
+
+def ground_internal_answer(raw_answer: str, sources: list[CitableSource]) -> GroundedAnswer:
     """Keep only claims carrying valid ``[n]`` references to supplied chunks."""
     stripped = raw_answer.strip()
     if not stripped:
@@ -54,16 +119,16 @@ def ground_internal_answer(raw_answer: str, sources: list[RetrievedChunk]) -> Gr
         grounded_segments.append(segment)
         claim_text = re.sub(r"\s+([.,!?;:])", r"\1", _CITATION_RE.sub("", segment)).strip()
         for source_index in valid_indices:
-            chunk = sources[source_index].chunk
+            source = sources[source_index]
             citations.append(
                 Citation(
                     claim_text=claim_text,
                     source_tier="internal",
                     reference=CitationReference(
-                        chunk_id=str(chunk.chunk_id),
-                        doc_title=chunk.doc_title,
-                        sop_version=chunk.sop_version,
-                        is_current_version=chunk.is_current_version,
+                        chunk_id=source.chunk_id,
+                        doc_title=source.doc_title,
+                        sop_version=source.sop_version,
+                        is_current_version=source.is_current_version,
                     ),
                 )
             )
@@ -78,6 +143,7 @@ def ground_internal_answer(raw_answer: str, sources: list[RetrievedChunk]) -> Gr
         answer=" ".join(grounded_segments),
         citations=citations,
         flagged_claims=flagged,
+        version_warning=build_version_warning(citations),
     )
 
 

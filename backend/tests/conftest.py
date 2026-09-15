@@ -98,8 +98,22 @@ class FakeReranker:
 
 
 class FakeGraphStore:
+    async def connect(self) -> None:
+        return None
+
     async def verify_connectivity(self) -> ComponentHealth:
-        return ComponentHealth(name="neo4j", status="pending", detail="Phase 3")
+        return ComponentHealth(name="neo4j", status="ok")
+
+    async def match_entities(self, names: Sequence[str]) -> list[str]:
+        del names
+        return []
+
+    async def neighborhood_facts(self, node_names: Sequence[str]) -> list[Any]:
+        del node_names
+        return []
+
+    async def close(self) -> None:
+        return None
 
 
 class FakeEmbeddingProvider:

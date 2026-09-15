@@ -7,7 +7,7 @@ import pytest
 from sarvamai.core.api_error import ApiError
 
 from src.api.config import Settings
-from src.generation.provenance import ground_internal_answer
+from src.generation.provenance import CitableSource, ground_internal_answer
 from src.generation.synthesizer import (
     AnswerSynthesizer,
     CompletionResult,
@@ -31,10 +31,14 @@ def _source() -> RetrievedChunk:
     )
 
 
+def _citable() -> CitableSource:
+    return CitableSource.from_chunk(_source())
+
+
 def test_uncited_claim_is_removed_and_flagged() -> None:
     result = ground_internal_answer(
         "Refunds require manager approval [1]. This policy never expires.",
-        [_source()],
+        [_citable()],
     )
 
     assert result.answer == "Refunds require manager approval [1]."
@@ -65,7 +69,7 @@ async def test_synthesizer_builds_numbered_context_and_citations() -> None:
 def test_refusal_prefix_cannot_bypass_uncited_claim_filter() -> None:
     result = ground_internal_answer(
         "Insufficient context. The CEO approved the exception.",
-        [_source()],
+        [_citable()],
     )
 
     assert result.answer == "The provided context is insufficient to answer this question."
