@@ -5,20 +5,27 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-import structlog
+# Make ``src`` importable regardless of the current working directory: add the
+# backend/ root (this file's parent's parent) to sys.path before importing.
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
 
-from src.api.config import Settings
-from src.api.logging import configure_logging
-from src.api.schemas import IngestionSummary
-from src.indexing.embeddings import InProcessBGEM3
-from src.indexing.graph_store import GraphStore
-from src.indexing.vector_store import VectorStore
-from src.ingestion.chunker import Chunk, DocumentChunker
-from src.ingestion.graph_extractor import GraphExtractor
-from src.ingestion.parser import SUPPORTED_SUFFIXES, DocType, DocumentParser
+import structlog  # noqa: E402
+
+from src.api.config import Settings  # noqa: E402
+from src.api.logging import configure_logging  # noqa: E402
+from src.api.schemas import IngestionSummary  # noqa: E402
+from src.indexing.embeddings import InProcessBGEM3  # noqa: E402
+from src.indexing.graph_store import GraphStore  # noqa: E402
+from src.indexing.vector_store import VectorStore  # noqa: E402
+from src.ingestion.chunker import Chunk, DocumentChunker  # noqa: E402
+from src.ingestion.graph_extractor import GraphExtractor  # noqa: E402
+from src.ingestion.parser import SUPPORTED_SUFFIXES, DocType, DocumentParser  # noqa: E402
 
 logger = structlog.get_logger(__name__)
 
