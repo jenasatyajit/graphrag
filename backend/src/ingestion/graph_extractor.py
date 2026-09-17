@@ -99,11 +99,15 @@ class GraphExtractor:
 
     @staticmethod
     def _enrich_node(node: GraphNode, chunk: Chunk) -> GraphNode:
-        """Attach SOP-versioning properties to Process nodes.
+        """Canonicalize and version-tag Process nodes.
 
-        ``doc_title``/``sop_version``/``is_current_version`` let the graph store
-        build the ``SUPERSEDES`` chain and flag superseded versions. Other node
-        types are returned unchanged.
+        A document has exactly one process, but the LLM often names it
+        differently across chunks ("Expense Approval" vs "Expense Approval SOP
+        v2"), which fragments it into several MERGE'd nodes and breaks step
+        traversal. We therefore force every Process node's ``name`` to the
+        canonical ``doc_title`` so all chunks collapse onto one node, and attach
+        ``doc_title``/``sop_version``/``is_current_version`` so the graph store
+        can build the ``SUPERSEDES`` chain. Non-Process nodes are unchanged.
         """
         if node.label != "Process":
             return node
@@ -112,7 +116,7 @@ class GraphExtractor:
         if chunk.sop_version is not None:
             properties["sop_version"] = chunk.sop_version
         properties["is_current_version"] = chunk.is_current_version
-        return node.model_copy(update={"properties": properties})
+        return node.model_copy(update={"name": chunk.doc_title, "properties": properties})
 
 
 def _parse_triples_payload(text: str) -> list[Any]:

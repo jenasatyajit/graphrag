@@ -42,8 +42,12 @@ class Settings(BaseSettings):
     llm_model: str = "sarvam-105b"
     llm_router_reasoning_effort: str | None = None
     llm_synth_reasoning_effort: str | None = "low"
-    llm_extract_reasoning_effort: str | None = None
-    llm_extract_max_tokens: int = Field(default=2048, gt=0)
+    # Extraction reliably needs some reasoning budget on sarvam-105b: with it
+    # disabled the model frequently returns empty replies for content-rich
+    # chunks. "medium" produces a dense, correct graph; 4096 tokens leaves room
+    # for reasoning tokens without truncating the JSON. Verified 2026-09-15.
+    llm_extract_reasoning_effort: str | None = "medium"
+    llm_extract_max_tokens: int = Field(default=8192, gt=0)
     max_agent_iterations: int = Field(default=3, gt=0)
 
     neo4j_database: str = "neo4j"

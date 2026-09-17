@@ -33,11 +33,19 @@ Allowed relationships (subject label -> relation -> object label ONLY):
 Rules:
 - Use ONLY the labels and relationships above. Never invent new ones.
 - If a triple does not fit an allowed shape exactly, omit it.
-- "name" is a short canonical entity name (e.g. "Expense Approval", "IT Admin",
-  "SAP"), not a whole sentence.
+- "name" is a SHORT, CANONICAL entity name, not a sentence. Use the shortest
+  form that identifies the entity and reuse the EXACT SAME name every time that
+  entity appears. Examples: use "Concur" (never "Concur system", "the Concur
+  tool"); "SAP" (never "SAP system"); "IT Admin" (never "the IT Admin role").
+- For the Process, use the process's own short name (e.g. "Expense Approval"),
+  not the document filename or version.
+- Do NOT include qualifier words like "system", "tool", "process", "role",
+  "step", or version numbers inside the name.
 - Optional properties you may set when clearly present: Step.order (int),
   ComplianceRequirement.regulation_ref (str), Spec.value (str), Spec.unit (str),
   Product.sku (str).
+- ComplianceRequirement is only for regulations/policies (e.g. "SOX Financial
+  Controls", "GDPR Data Handling"), NOT service levels or timelines.
 - Do NOT emit SUPERSEDES; SOP version chains are created separately.
 - If the chunk contains no extractable facts, return {"triples": []}.
 - Output JSON only. No prose, no markdown fences."""

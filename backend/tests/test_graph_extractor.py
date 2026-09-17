@@ -66,7 +66,8 @@ async def test_extractor_maps_valid_triples() -> None:
 
     assert len(triples) == 2
     assert all(isinstance(triple, GraphTriple) for triple in triples)
-    assert triples[0].subject.name == "Expense Approval"
+    # Process name is canonicalized to the chunk's doc_title.
+    assert triples[0].subject.name == "Expense Approval SOP"
     assert triples[0].relation == "HAS_STEP"
 
 
@@ -88,6 +89,8 @@ async def test_extractor_enriches_process_nodes_for_versioning() -> None:
     triples = await extractor.extract(_chunk("Submit the report.", sop_version="v2.1"))
 
     process = triples[0].subject
+    # Process name is canonicalized to the doc title to prevent fragmentation.
+    assert process.name == "Expense Approval SOP"
     assert process.properties["doc_title"] == "Expense Approval SOP"
     assert process.properties["sop_version"] == "v2.1"
     assert process.properties["is_current_version"] is True
