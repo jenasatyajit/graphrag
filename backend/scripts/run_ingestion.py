@@ -25,6 +25,7 @@ from src.indexing.graph_store import GraphStore  # noqa: E402
 from src.indexing.vector_store import VectorStore  # noqa: E402
 from src.ingestion.chunker import Chunk, DocumentChunker  # noqa: E402
 from src.ingestion.graph_extractor import GraphExtractor  # noqa: E402
+from src.ingestion.multimodal import MultimodalIngestor  # noqa: E402
 from src.ingestion.parser import SUPPORTED_SUFFIXES, DocType, DocumentParser  # noqa: E402
 
 logger = structlog.get_logger(__name__)
@@ -38,8 +39,9 @@ async def run_ingestion(
     effective_date: date | None = None,
 ) -> IngestionSummary:
     """Parse, chunk, embed, and index every supported file in ``data/raw``."""
-    parser = DocumentParser()
+    parser = DocumentParser(settings=settings, image_output_dir=settings.ingestion_image_dir)
     chunker = DocumentChunker()
+    multimodal = MultimodalIngestor(chunker)
     embedder = InProcessBGEM3(
         settings.embedding_model,
         device=settings.embedding_device,
@@ -52,6 +54,8 @@ async def run_ingestion(
     extractor = GraphExtractor(settings)
     docs_processed = 0
     chunks_created = 0
+    tables_extracted = 0
+    images_extracted = 0
     graph_nodes: set[tuple[str, str]] = set()
     graph_edges = 0
     superseded_titles: list[tuple[str, str]] = []
@@ -73,10 +77,20 @@ async def run_ingestion(
                     sop_version=sop_version if doc_type == "SOP" else None,
                     effective_date=effective_date,
                 )
-                chunks = chunker.chunk(document)
-                edges, nodes = await _extract_and_write_graph(extractor, graph_store, chunks)
+                text_chunks = chunker.chunk(document)
+                multimodal_chunks = multimodal.build_chunks(document)
+                tables_extracted += multimodal_chunks.table_count
+                images_extracted += multimodal_chunks.image_count
+
+                # Graph extraction runs over text and table chunks (structured
+                # facts) but not image captions, which are prose and would add
+                # noisy triples. All chunks are embedded and indexed.
+                graph_chunks = [*text_chunks, *multimodal_chunks.graph_eligible]
+                edges, nodes = await _extract_and_write_graph(extractor, graph_store, graph_chunks)
                 graph_edges += edges
                 graph_nodes |= nodes
+
+                chunks = [*text_chunks, *multimodal_chunks.all]
                 for offset in range(0, len(chunks), settings.embedding_batch_size):
                     batch = chunks[offset : offset + settings.embedding_batch_size]
                     embeddings = await embedder.embed(
@@ -91,6 +105,8 @@ async def run_ingestion(
                     "document_ingested",
                     doc_id=str(document.doc_id),
                     chunk_count=len(chunks),
+                    table_count=multimodal_chunks.table_count,
+                    image_count=multimodal_chunks.image_count,
                     graph_edges=edges,
                 )
             except Exception:
@@ -117,6 +133,8 @@ async def run_ingestion(
     summary = IngestionSummary(
         docs_processed=docs_processed,
         chunks_created=chunks_created,
+        tables_extracted=tables_extracted,
+        images_extracted=images_extracted,
         graph_nodes_created=len(graph_nodes),
         graph_edges_created=graph_edges,
         failed_documents=failures,

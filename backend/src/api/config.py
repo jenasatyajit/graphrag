@@ -78,6 +78,18 @@ class Settings(BaseSettings):
     docling_vlm_url: AnyHttpUrl | None = None
     docling_vlm_token: SecretStr | None = None
     docling_vlm_model: str | None = None
+    # Phase 4 multimodal ingestion (GPU VM only). Picture captioning is enabled
+    # only when docling_vlm_url is set; otherwise ingestion still extracts tables
+    # and skips captions so the batch job degrades gracefully.
+    docling_image_scale: float = Field(default=2.0, gt=0)
+    docling_caption_prompt: str = (
+        "Describe this image or chart factually for document retrieval. "
+        "Be concise and specific about any data, labels, and values shown."
+    )
+    docling_caption_timeout_seconds: float = Field(default=90.0, gt=0)
+    docling_extract_tables: bool = True
+    docling_extract_charts: bool = True
+    ingestion_image_dir: Path = Path("data/processed/images")
     conversation_store: Literal["memory", "sqlite"] = "memory"
     conversation_history_max_turns: int = Field(default=20, gt=0)
     app_environment: Literal["development", "production", "test"] = "development"

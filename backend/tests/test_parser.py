@@ -99,3 +99,89 @@ def test_parser_rejects_unsupported_files(tmp_path) -> None:
 
     with pytest.raises(IngestionError, match="format is not supported"):
         DocumentParser().parse(source, doc_type="SOP")
+
+
+def _fake_document(*, texts, tables=None, pictures=None):
+    return SimpleNamespace(texts=texts, tables=tables or [], pictures=pictures or [])
+
+
+def _fake_image(saved_paths):
+    """A PIL-like image whose save() records the target path."""
+
+    def save(target, fmt):
+        del fmt
+        saved_paths.append(target)
+
+    return SimpleNamespace(save=save)
+
+
+def test_parser_extracts_table_markdown(tmp_path) -> None:
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"fake")
+    table = SimpleNamespace(
+        export_to_markdown=lambda doc: "| a | b |\n| - | - |\n| 1 | 2 |",
+        prov=[SimpleNamespace(page_no=3)],
+    )
+    document = _fake_document(
+        texts=[SimpleNamespace(text="Overview", label=None, prov=[])],
+        tables=[table],
+    )
+    converter = SimpleNamespace(convert=lambda path: SimpleNamespace(document=document))
+
+    parsed = DocumentParser(converter_factory=lambda: converter).parse(
+        source, doc_type="product_info"
+    )
+
+    assert len(parsed.tables) == 1
+    assert "| a | b |" in parsed.tables[0].markdown
+    assert parsed.tables[0].page_number == 3
+
+
+def test_parser_captions_pictures_and_saves_images(tmp_path) -> None:
+    source = tmp_path / "brochure.pdf"
+    source.write_bytes(b"fake")
+    saved: list = []
+    picture = SimpleNamespace(
+        caption_text=lambda doc: "A bar chart of quarterly revenue.",
+        get_image=lambda doc: _fake_image(saved),
+        annotations=[],
+        prov=[SimpleNamespace(page_no=5)],
+    )
+    document = _fake_document(
+        texts=[SimpleNamespace(text="Overview", label=None, prov=[])],
+        pictures=[picture],
+    )
+    converter = SimpleNamespace(convert=lambda path: SimpleNamespace(document=document))
+
+    parsed = DocumentParser(
+        converter_factory=lambda: converter,
+        image_output_dir=tmp_path / "images",
+    ).parse(source, doc_type="product_info")
+
+    assert len(parsed.images) == 1
+    assert parsed.images[0].caption == "A bar chart of quarterly revenue."
+    assert parsed.images[0].page_number == 5
+    assert parsed.images[0].image_path is not None
+    assert len(saved) == 1
+
+
+def test_parser_skips_pictures_without_caption(tmp_path) -> None:
+    source = tmp_path / "brochure.pdf"
+    source.write_bytes(b"fake")
+    picture = SimpleNamespace(
+        caption_text=lambda doc: "",
+        get_image=lambda doc: None,
+        annotations=[],
+        prov=[SimpleNamespace(page_no=1)],
+    )
+    document = _fake_document(
+        texts=[SimpleNamespace(text="Overview", label=None, prov=[])],
+        pictures=[picture],
+    )
+    converter = SimpleNamespace(convert=lambda path: SimpleNamespace(document=document))
+
+    parsed = DocumentParser(converter_factory=lambda: converter).parse(
+        source, doc_type="product_info"
+    )
+
+    assert parsed.images == []

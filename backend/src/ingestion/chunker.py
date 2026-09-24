@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-from src.ingestion.parser import ParsedDocument, ParsedTextBlock
+from src.ingestion.parser import ParsedDocument, ParsedImageBlock, ParsedTextBlock
 
 ContentType = Literal["text", "table", "image_caption"]
 SourceTier = Literal["internal"]
@@ -37,6 +37,9 @@ class Chunk(BaseModel):
     entity_ids: list[str] = Field(default_factory=list)
     source_tier: SourceTier = "internal"
     step_order: int | None = Field(default=None, ge=1)
+    # Path to the original extracted image, set only for image_caption chunks so
+    # the UI can optionally display the source figure alongside its caption.
+    image_path: str | None = None
 
 
 class DocumentChunker:
@@ -51,7 +54,12 @@ class DocumentChunker:
         self._overlap_chars = overlap_chars
 
     def chunk(self, document: ParsedDocument) -> list[Chunk]:
-        """Chunk a parsed document without losing its source metadata."""
+        """Chunk a parsed document's narrative text without losing metadata.
+
+        This covers text only. Multimodal table and image-caption chunks are
+        produced by ``chunk_tables`` and ``chunk_images`` so callers can route
+        them differently (e.g. skip graph extraction for captions).
+        """
         if document.doc_type == "SOP":
             segments = self._sop_segments(document.blocks)
         else:
@@ -70,6 +78,62 @@ class DocumentChunker:
                     )
                 )
         return chunks
+
+    def chunk_tables(self, document: ParsedDocument) -> list[Chunk]:
+        """Build one ``table`` chunk per extracted table markdown block.
+
+        Tables are kept whole (one chunk each) so row/column relationships and
+        the surrounding markdown structure survive into retrieval intact.
+        """
+        chunks: list[Chunk] = []
+        for table in document.tables:
+            markdown = table.markdown.strip()
+            if not markdown:
+                continue
+            chunks.append(
+                self._build_chunk(
+                    document,
+                    text=markdown,
+                    page_number=table.page_number,
+                    step_order=None,
+                    content_type="table",
+                )
+            )
+        return chunks
+
+    def chunk_images(self, document: ParsedDocument) -> list[Chunk]:
+        """Build chunks for picture captions and any chart-derived table data.
+
+        Each captioned picture yields one ``image_caption`` chunk carrying the
+        original image reference. When Docling's chart extraction produced tabular
+        data for that picture, an additional ``table`` chunk is emitted so the
+        structured chart values are retrievable alongside the caption.
+        """
+        chunks: list[Chunk] = []
+        for image in document.images:
+            chunks.append(self._image_caption_chunk(document, image))
+            chart_markdown = (image.chart_markdown or "").strip()
+            if chart_markdown:
+                chunks.append(
+                    self._build_chunk(
+                        document,
+                        text=chart_markdown,
+                        page_number=image.page_number,
+                        step_order=None,
+                        content_type="table",
+                    )
+                )
+        return chunks
+
+    def _image_caption_chunk(self, document: ParsedDocument, image: ParsedImageBlock) -> Chunk:
+        return self._build_chunk(
+            document,
+            text=image.caption.strip(),
+            page_number=image.page_number,
+            step_order=None,
+            content_type="image_caption",
+            image_path=image.image_path,
+        )
 
     def _sop_segments(
         self,
@@ -155,16 +219,20 @@ class DocumentChunker:
         text: str,
         page_number: int | None,
         step_order: int | None,
+        content_type: ContentType = "text",
+        image_path: str | None = None,
     ) -> Chunk:
         return Chunk(
             doc_id=document.doc_id,
             doc_title=document.doc_title,
             doc_type=document.doc_type,
+            content_type=content_type,
             text=text,
             page_number=page_number,
             sop_version=document.sop_version,
             effective_date=document.effective_date,
             step_order=step_order,
+            image_path=image_path,
         )
 
 

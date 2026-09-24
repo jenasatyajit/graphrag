@@ -64,6 +64,8 @@ class IngestionSummary(BaseModel):
 
     docs_processed: int = Field(ge=0)
     chunks_created: int = Field(ge=0)
+    tables_extracted: int = Field(default=0, ge=0)
+    images_extracted: int = Field(default=0, ge=0)
     graph_nodes_created: int = Field(default=0, ge=0)
     graph_edges_created: int = Field(default=0, ge=0)
     failed_documents: list[str] = Field(default_factory=list)
