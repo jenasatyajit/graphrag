@@ -47,6 +47,82 @@ def test_uncited_claim_is_removed_and_flagged() -> None:
     assert result.flagged_claims == ["This policy never expires."]
 
 
+def _two_sources() -> list[CitableSource]:
+    a = CitableSource.from_chunk(_source())
+    b = CitableSource(
+        text="Finance approval requires SAP.",
+        doc_title="Expense Approval SOP",
+        chunk_id="00000000-0000-0000-0000-0000000000ff",
+        sop_version="v3.0",
+        is_current_version=True,
+    )
+    return [a, b]
+
+
+def test_markdown_bullet_list_is_grounded_not_shredded() -> None:
+    # A markdown bullet list with a marker per line must survive as clean prose,
+    # not be discarded as uncited fragments (regression for the "[1][2]" answers).
+    raw = "* Refunds require manager approval [1].\n* Finance approval requires SAP [2]."
+    result = ground_internal_answer(raw, _two_sources())
+
+    assert "Refunds require manager approval [1]." in result.answer
+    assert "Finance approval requires SAP [2]." in result.answer
+    assert len(result.citations) == 2
+    # List bullets are stripped from the citable claim text.
+    assert result.citations[0].claim_text == "Refunds require manager approval."
+    assert result.citations[1].claim_text == "Finance approval requires SAP."
+    assert result.flagged_claims == []
+
+
+def test_adjacent_and_comma_markers_resolve_all_sources() -> None:
+    result = ground_internal_answer("Both sources agree [1][2].", _two_sources())
+    assert len(result.citations) == 2
+
+    comma = ground_internal_answer("Both sources agree [1, 2].", _two_sources())
+    assert len(comma.citations) == 2
+
+
+def test_inline_document_marker_leaves_clean_claim_text() -> None:
+    # "(document [1])" phrasing must not leave an empty "(document )" behind.
+    result = ground_internal_answer(
+        "The Expense Approval SOP (document [1]) states managers approve expenses [1].",
+        _two_sources(),
+    )
+    assert "(document )" not in result.citations[0].claim_text
+    assert "document" not in result.citations[0].claim_text.lower()
+
+
+def test_marker_only_line_is_kept_without_empty_citation() -> None:
+    # A line that is only markers keeps the answer readable but emits no
+    # empty-text citation, and does not count as a dropped claim.
+    result = ground_internal_answer(
+        "Managers approve expenses [1].\n[1][2]",
+        _two_sources(),
+    )
+    assert result.citations
+    assert all(citation.claim_text for citation in result.citations)
+    assert result.flagged_claims == []
+
+
+def test_graph_fact_cites_real_document_when_chunk_known() -> None:
+    from src.indexing.graph_schema import GraphFact
+
+    source = _source()
+    lookup = {str(source.chunk.chunk_id): source}
+    fact = GraphFact(
+        subject_name="Finance Approval",
+        relation="REQUIRES",
+        object_name="SAP",
+        chunk_ids=[str(source.chunk.chunk_id)],
+    )
+
+    citable = CitableSource.from_graph_fact(fact, chunk_lookup=lookup)
+
+    assert citable.doc_title == "Refund SOP"
+    assert citable.doc_title != "Knowledge graph"
+    assert citable.sop_version == "v3.0"
+
+
 class FakeCompletionProvider:
     async def complete(self, *, system_prompt: str, user_prompt: str) -> CompletionResult:
         assert "ONLY" in system_prompt

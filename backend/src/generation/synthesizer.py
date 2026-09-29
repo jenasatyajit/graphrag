@@ -20,10 +20,16 @@ from src.indexing.vector_store import RetrievedChunk
 logger = structlog.get_logger(__name__)
 
 SYNTHESIS_SYSTEM_PROMPT = """Answer the user's question using ONLY the provided context.
-For every factual claim, add one or more citation markers like [1] or [2] referencing the
-numbered source list. If a claim cannot be supported by the context, omit it. If the
-context is insufficient, say so explicitly rather than guessing. Never use your own
-knowledge as evidence."""
+
+Citation rules (follow exactly):
+- End every sentence that states a fact with one or more citation markers like [1] or [1][3].
+- Put the marker at the END of the sentence, after the period is not required - place it
+  right before the period, e.g. "Managers approve expenses [1]."
+- Do NOT write phrases like "document [1]" or "source [2]" inside the sentence; the marker
+  alone is the reference.
+- Write in plain prose sentences, not bullet lists. Do not number your sentences.
+- If a claim cannot be supported by the context, omit it. If the context is insufficient to
+  answer, reply exactly: "Insufficient context to answer." Never use your own knowledge."""
 
 
 class _Unset:
@@ -136,7 +142,14 @@ class AnswerSynthesizer:
         # structured triples, so spending rerank budget on them adds latency
         # without improving ordering.
         citable: list[CitableSource] = [CitableSource.from_chunk(source) for source in sources]
-        citable.extend(CitableSource.from_graph_fact(fact) for fact in (graph_facts or []))
+        # Map chunk_id -> retrieved chunk so a graph fact cites the real source
+        # document (title/version) it was extracted from, when that chunk is in
+        # the retrieved set, instead of a synthetic "Knowledge graph" label.
+        chunk_lookup = {str(source.chunk.chunk_id): source for source in sources}
+        citable.extend(
+            CitableSource.from_graph_fact(fact, chunk_lookup=chunk_lookup)
+            for fact in (graph_facts or [])
+        )
 
         if not citable:
             return GroundedAnswer(

@@ -18,8 +18,15 @@ from src.api.schemas import Citation, CitationReference
 from src.indexing.graph_schema import GraphFact
 from src.indexing.vector_store import RetrievedChunk
 
-_CITATION_RE = re.compile(r"\[(\d+)]")
+# One or more adjacent citation markers, e.g. "[1]", "[1][2]", "[1, 2]" or "[1] [2]".
+_CITATION_RE = re.compile(r"\[\s*\d+(?:\s*,\s*\d+)*\s*]")
+_SINGLE_NUMBER_RE = re.compile(r"\d+")
+# Split on sentence boundaries and hard newlines so markdown lists (one bullet
+# per line) become individual segments rather than one giant blob.
 _SEGMENT_RE = re.compile(r"(?<=[.!?])(?:\s+|$)|\n+")
+# Leading markdown list/heading noise stripped from a segment before it becomes
+# a clean, citable claim (e.g. "*   ", "- ", "1. ", "#### ").
+_LIST_PREFIX_RE = re.compile(r"^\s*(?:[*\-+]\s+|\d+[.)]\s+|#+\s+)")
 _INSUFFICIENT_PREFIXES = (
     "insufficient context",
     "the provided context is insufficient",
@@ -56,11 +63,35 @@ class CitableSource(BaseModel):
         )
 
     @classmethod
-    def from_graph_fact(cls, fact: GraphFact) -> CitableSource:
+    def from_graph_fact(
+        cls,
+        fact: GraphFact,
+        *,
+        chunk_lookup: dict[str, RetrievedChunk] | None = None,
+    ) -> CitableSource:
+        """Build a citable source from a graph fact.
+
+        A graph fact is traceable to the chunk it was extracted from. When that
+        chunk is among the retrieved sources, resolve the citation's real
+        ``doc_title``/version/current-flag from it so a graph-derived claim cites
+        the actual document rather than a synthetic "Knowledge graph" label.
+        """
+        chunk_id = fact.chunk_ids[0] if fact.chunk_ids else None
+        source_chunk = chunk_lookup.get(chunk_id) if (chunk_lookup and chunk_id) else None
+        if source_chunk is not None:
+            chunk = source_chunk.chunk
+            return cls(
+                text=fact.as_text(),
+                doc_title=chunk.doc_title,
+                chunk_id=str(chunk.chunk_id),
+                sop_version=chunk.sop_version,
+                is_current_version=chunk.is_current_version,
+                origin="graph_fact",
+            )
         return cls(
             text=fact.as_text(),
             doc_title="Knowledge graph",
-            chunk_id=fact.chunk_ids[0] if fact.chunk_ids else None,
+            chunk_id=chunk_id,
             sop_version=None,
             is_current_version=True,
             origin="graph_fact",
@@ -109,20 +140,34 @@ def ground_internal_answer(raw_answer: str, sources: list[CitableSource]) -> Gro
     grounded_segments: list[str] = []
     citations: list[Citation] = []
     flagged: list[str] = []
+    seen_citations: set[tuple[str, str | None]] = set()
     for segment in _segments(stripped):
-        marker_numbers = [int(value) for value in _CITATION_RE.findall(segment)]
-        valid_indices = list(dict.fromkeys(number - 1 for number in marker_numbers))
-        if not valid_indices or any(index < 0 or index >= len(sources) for index in valid_indices):
-            flagged.append(segment)
+        valid_indices = _valid_source_indices(segment, len(sources))
+        prose = _claim_text(segment)
+
+        if not valid_indices:
+            # A segment with no valid marker is only a "dropped claim" if it
+            # actually asserts something. Pure structure (a bullet with no prose,
+            # or stray markers the model put on their own line) is not a claim and
+            # must not trip the uncited-claim rule or pollute flagged_claims.
+            if prose:
+                flagged.append(prose)
             continue
 
-        grounded_segments.append(segment)
-        claim_text = re.sub(r"\s+([.,!?;:])", r"\1", _CITATION_RE.sub("", segment)).strip()
+        grounded_segments.append(segment.strip())
+        if not prose:
+            # Markers with no prose (e.g. a line that is just "[1][2]"): keep them
+            # in the readable answer but emit no empty-text citation.
+            continue
         for source_index in valid_indices:
             source = sources[source_index]
+            key = (prose, source.chunk_id)
+            if key in seen_citations:
+                continue
+            seen_citations.add(key)
             citations.append(
                 Citation(
-                    claim_text=claim_text,
+                    claim_text=prose,
                     source_tier="internal",
                     reference=CitationReference(
                         chunk_id=source.chunk_id,
@@ -133,7 +178,7 @@ def ground_internal_answer(raw_answer: str, sources: list[CitableSource]) -> Gro
                 )
             )
 
-    if not grounded_segments:
+    if not citations:
         return GroundedAnswer(
             answer="The provided context is insufficient to produce a citation-grounded answer.",
             citations=[],
@@ -145,6 +190,34 @@ def ground_internal_answer(raw_answer: str, sources: list[CitableSource]) -> Gro
         flagged_claims=flagged,
         version_warning=build_version_warning(citations),
     )
+
+
+def _valid_source_indices(segment: str, source_count: int) -> list[int]:
+    """Return the 0-based source indices referenced by a segment's markers.
+
+    Returns an empty list if the segment has no markers or any marker points
+    outside the supplied source range (so a hallucinated ``[99]`` invalidates
+    the reference rather than silently citing the wrong source).
+    """
+    numbers: list[int] = []
+    for marker in _CITATION_RE.findall(segment):
+        numbers.extend(int(value) for value in _SINGLE_NUMBER_RE.findall(marker))
+    indices = list(dict.fromkeys(number - 1 for number in numbers))
+    if not indices or any(index < 0 or index >= source_count for index in indices):
+        return []
+    return indices
+
+
+def _claim_text(segment: str) -> str:
+    """Strip markers and leading list/heading noise into a clean claim string."""
+    without_prefix = _LIST_PREFIX_RE.sub("", segment)
+    without_markers = _CITATION_RE.sub("", without_prefix)
+    # Collapse space left before punctuation and any doubled whitespace.
+    cleaned = re.sub(r"\s+([.,!?;:])", r"\1", without_markers)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    # Drop an empty parenthetical the markers left behind, e.g. "(document )".
+    cleaned = re.sub(r"\(\s*(?:document|source|ref)?\s*\)", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip(" \t*-•").strip()
 
 
 def _segments(text: str) -> list[str]:
