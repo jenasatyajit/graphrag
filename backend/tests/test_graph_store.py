@@ -107,6 +107,33 @@ async def test_write_triples_groups_by_shape_and_uses_write_routing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_process_merge_is_version_aware() -> None:
+    # A Process carrying sop_version must MERGE on (name, sop_version) so two SOP
+    # versions become two distinct nodes; other labels MERGE on name only. This
+    # is what lets the SUPERSEDES chain link a superseded version to the current.
+    driver = FakeDriver(results=[[{"edges": 1}]])
+    store = GraphStore(_settings(), driver=driver)
+
+    triple = GraphTriple(
+        subject=GraphNode(
+            label="Process",
+            name="Expense Approval SOP",
+            properties={"sop_version": "v3.0", "doc_title": "Expense Approval SOP"},
+        ),
+        relation="HAS_STEP",
+        object=GraphNode(label="Step", name="Manager Review"),
+    )
+    await store.write_triples([triple], chunk_id="chunk-1")
+
+    cypher, params, _ = driver.calls[0]
+    # Process MERGE keys on both name and version; Step MERGE keys on name only.
+    assert "sop_version: row.subject_version" in cypher
+    assert "MERGE (o:`Step` {name: row.object_name})" in cypher
+    assert params["rows"][0]["subject_version"] == "v3.0"
+    assert params["rows"][0]["object_version"] == ""
+
+
+@pytest.mark.asyncio
 async def test_supersede_previous_versions_creates_edge() -> None:
     driver = FakeDriver(results=[[{"superseded": 1}]])
     store = GraphStore(_settings(), driver=driver)

@@ -20,7 +20,7 @@ from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt,
 from src.api.config import Settings
 from src.api.errors import GraphError
 from src.api.schemas import ComponentHealth
-from src.indexing.graph_schema import GraphFact, GraphTriple, RelationType
+from src.indexing.graph_schema import GraphFact, GraphNode, GraphTriple, RelationType
 
 logger = structlog.get_logger(__name__)
 
@@ -106,20 +106,22 @@ class GraphStore:
                 {
                     "subject_name": triple.subject.name,
                     "subject_props": dict(triple.subject.properties),
+                    "subject_version": _merge_version(triple.subject),
                     "object_name": triple.object.name,
                     "object_props": dict(triple.object.properties),
+                    "object_version": _merge_version(triple.object),
                 }
                 for triple in group
             ]
             cypher = f"""
             UNWIND $rows AS row
-            MERGE (s:`{subject_label}` {{name: row.subject_name}})
+            {_merge_node_clause(subject_label, "s", "subject")}
             SET s += row.subject_props,
                 s.chunk_ids =
                     CASE WHEN $chunk_id IN coalesce(s.chunk_ids, [])
                          THEN s.chunk_ids
                          ELSE coalesce(s.chunk_ids, []) + $chunk_id END
-            MERGE (o:`{object_label}` {{name: row.object_name}})
+            {_merge_node_clause(object_label, "o", "object")}
             SET o += row.object_props,
                 o.chunk_ids =
                     CASE WHEN $chunk_id IN coalesce(o.chunk_ids, [])
@@ -289,6 +291,36 @@ class GraphStore:
             raise
         except Exception as exc:
             raise GraphError("A Neo4j graph operation failed.") from exc
+
+
+def _merge_version(node: GraphNode) -> str:
+    """Return the ``sop_version`` used to key a versioned Process MERGE.
+
+    Only ``Process`` nodes are versioned. A missing version collapses to an empty
+    string so version-less processes (and every non-Process node) still MERGE on
+    name alone. Two SOP versions of the same document therefore become two
+    distinct Process nodes, which is what the ``SUPERSEDES`` chain links.
+    """
+    if node.label != "Process":
+        return ""
+    version = node.properties.get("sop_version", "")
+    return str(version) if version else ""
+
+
+def _merge_node_clause(label: str, var: str, prefix: str) -> str:
+    """Build the MERGE clause for a node, version-aware for ``Process``.
+
+    ``Process`` nodes MERGE on ``(name, sop_version)`` so each SOP version is its
+    own node; all other labels MERGE on ``name`` only. Labels are schema
+    constants (validated by ``GraphTriple``), never user text, so interpolation
+    here cannot carry injection.
+    """
+    if label == "Process":
+        return (
+            f"MERGE ({var}:`{label}` "
+            f"{{name: row.{prefix}_name, sop_version: row.{prefix}_version}})"
+        )
+    return f"MERGE ({var}:`{label}` {{name: row.{prefix}_name}})"
 
 
 def _retryable_neo4j_errors() -> tuple[type[BaseException], ...]:
