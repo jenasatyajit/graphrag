@@ -435,7 +435,7 @@ class AgentRouter:
             tool=call.name,
             forced=forced,
             query_length=len(query),
-            result=summary,
+            result=_redacted_summary(summary),
         )
         return summary
 
@@ -557,6 +557,17 @@ class AgentRouter:
             notices=notices,
             flagged_claims=grounded.flagged_claims,
         )
+
+
+# Tool-result fields that carry retrieved text (chunk excerpts, web snippets,
+# graph-fact prose). They must reach the LLM as the tool message but must NOT be
+# duplicated into structured logs, which log ids/counts/scores only (SPEC 12).
+_LOGGED_SUMMARY_TEXT_FIELDS = ("excerpt", "results", "graph_facts")
+
+
+def _redacted_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Strip retrieved text from a tool summary so logs carry counts, not bodies."""
+    return {key: value for key, value in summary.items() if key not in _LOGGED_SUMMARY_TEXT_FIELDS}
 
 
 def _already_failed(name: str, pool: _EvidencePool) -> bool:
