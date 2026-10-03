@@ -176,3 +176,92 @@ async def test_sarvam_provider_retries_transient_server_error(settings: Settings
 
     assert result.text == "Grounded [1]."
     assert chat.attempts == 2
+
+
+class BudgetChat:
+    """First call is truncated inside reasoning; the retry (bigger budget) answers."""
+
+    def __init__(self) -> None:
+        self.max_tokens: list[int] = []
+
+    async def completions(self, **kwargs: object) -> SimpleNamespace:
+        max_tokens = kwargs["max_tokens"]
+        assert isinstance(max_tokens, int)
+        self.max_tokens.append(max_tokens)
+        if len(self.max_tokens) == 1:
+            # finish_reason="length" with empty content == reasoning ate the budget.
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(message=SimpleNamespace(content=None), finish_reason="length")
+                ],
+                usage=None,
+            )
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Grounded [1]."), finish_reason="stop"
+                )
+            ],
+            usage=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_truncated_in_reasoning_retries_with_doubled_budget(settings: Settings) -> None:
+    chat = BudgetChat()
+    provider = SarvamCompletionProvider(settings, client=SimpleNamespace(chat=chat))
+
+    result = await provider.complete(system_prompt="system", user_prompt="user")
+
+    assert result.text == "Grounded [1]."
+    # First attempt uses the configured ceiling; the recovery doubles it.
+    assert chat.max_tokens == [
+        settings.llm_synth_max_tokens,
+        settings.llm_synth_max_tokens * 2,
+    ]
+
+
+class AlwaysTruncatedChat:
+    async def completions(self, **kwargs: object) -> SimpleNamespace:
+        del kwargs
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(message=SimpleNamespace(content=None), finish_reason="length")
+            ],
+            usage=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_persistent_reasoning_truncation_raises_clear_llm_error(settings: Settings) -> None:
+    from src.api.errors import LLMError
+
+    provider = SarvamCompletionProvider(
+        settings, client=SimpleNamespace(chat=AlwaysTruncatedChat())
+    )
+
+    with pytest.raises(LLMError, match="token budget"):
+        await provider.complete(system_prompt="system", user_prompt="user")
+
+
+class ContentFilterChat:
+    async def completions(self, **kwargs: object) -> SimpleNamespace:
+        del kwargs
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=None), finish_reason="content_filter"
+                )
+            ],
+            usage=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_empty_content_without_length_reason_is_not_retried(settings: Settings) -> None:
+    from src.api.errors import LLMError
+
+    provider = SarvamCompletionProvider(settings, client=SimpleNamespace(chat=ContentFilterChat()))
+
+    with pytest.raises(LLMError, match="empty answer"):
+        await provider.complete(system_prompt="system", user_prompt="user")

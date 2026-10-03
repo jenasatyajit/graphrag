@@ -86,7 +86,14 @@ class NaiveRagService:
         self._vector_store = vector_store
         self._synthesizer = synthesizer
 
-    async def query(self, question: str) -> GroundedAnswer:
+    async def retrieve(self, question: str) -> list[RetrievedChunk]:
+        """Embed the question and run dense-only retrieval.
+
+        Exposes the Phase 6 ablation hook: this is the exact retrieval ``query``
+        performs, factored out so the ablation runner can capture the dense
+        contexts without a second round-trip. ``query`` calls it, so its output
+        is unchanged (behavior-preserving refactor).
+        """
         if self._embedder is None:
             raise RetrievalError("The query embedding service is not configured.")
         embedding = await self._embedder.embed([question], mode="query")
@@ -96,6 +103,10 @@ class NaiveRagService:
             candidate_count=len(candidates),
             chunk_ids=[str(candidate.chunk.chunk_id) for candidate in candidates],
         )
+        return candidates
+
+    async def query(self, question: str) -> GroundedAnswer:
+        candidates = await self.retrieve(question)
         return await self._synthesizer.synthesize(question, candidates)
 
 

@@ -83,11 +83,30 @@ class Settings(BaseSettings):
     qdrant_dense_vector_name: str = "dense"
     qdrant_sparse_vector_name: str = "sparse"
     retrieval_top_k: int = Field(default=10, gt=0, le=100)
-    llm_synth_max_tokens: int = Field(default=4096, gt=0)
+    # Synthesis runs with reasoning enabled (llm_synth_reasoning_effort), and on
+    # sarvam-105b reasoning tokens are drawn from max_tokens BEFORE visible
+    # content. 4096 was too low for multi-source synthesis prompts: reasoning
+    # consumed the budget and content came back empty (finish_reason="length").
+    # 8192 leaves room for both. Verified against Sarvam docs 2026-10-03.
+    llm_synth_max_tokens: int = Field(default=8192, gt=0)
     llm_request_timeout_seconds: float = Field(default=60.0, gt=0)
     llm_max_retries: int = Field(default=3, gt=0, le=10)
     ingestion_data_dir: Path = Path("data/raw")
     ingestion_summary_path: Path = Path("data/processed/last_ingestion.json")
+    # Phase 6 evaluation (RAGAS + ablation). The judge reuses sarvam_api_key and
+    # talks to Sarvam's OpenAI-compatible endpoint; AnswerRelevancy embeddings
+    # reuse the query-time embedding service. These are read only by the offline
+    # eval CLI (scripts/run_eval.py), never by the request path.
+    eval_golden_set_path: Path = Path("data/eval/golden_set.jsonl")
+    eval_output_dir: Path = Path("data/eval/reports")
+    eval_judge_model: str = "sarvam-105b"
+    eval_judge_base_url: AnyHttpUrl = AnyHttpUrl("https://api.sarvam.ai/v1")
+    eval_judge_max_concurrency: int = Field(default=4, gt=0, le=32)
+    eval_judge_timeout_seconds: float = Field(default=60.0, gt=0)
+    # Documents whether the live corpus contains table/image_caption chunks, so
+    # the ablation runner can label the +graph+multimodal stage honestly (there
+    # is no query-time switch that disables multimodal chunks).
+    eval_corpus_includes_multimodal: bool = False
     docling_vlm_url: AnyHttpUrl | None = None
     docling_vlm_token: SecretStr | None = None
     docling_vlm_model: str | None = None

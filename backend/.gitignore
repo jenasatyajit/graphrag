@@ -8,6 +8,9 @@
 data/raw/
 data/processed/
 
+# Generated evaluation reports (the curated golden set itself IS committed)
+data/eval/reports/
+
 # Model caches
 hf_cache/
 huggingface_cache/

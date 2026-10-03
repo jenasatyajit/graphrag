@@ -65,6 +65,34 @@ def test_blank_required_value_still_fails() -> None:
         Settings(_env_file=None, **values)
 
 
+def test_eval_settings_defaults_load() -> None:
+    """Phase 6 eval keys should expose their typed defaults."""
+    settings = Settings(_env_file=None, **settings_values())
+
+    assert settings.eval_golden_set_path.as_posix() == "data/eval/golden_set.jsonl"
+    assert settings.eval_output_dir.as_posix() == "data/eval/reports"
+    assert settings.eval_judge_model == "sarvam-105b"
+    assert str(settings.eval_judge_base_url).rstrip("/") == "https://api.sarvam.ai/v1"
+    assert settings.eval_judge_max_concurrency == 4
+    assert settings.eval_judge_timeout_seconds == 60.0
+    assert settings.eval_corpus_includes_multimodal is False
+
+
+def test_blank_eval_values_fall_back_to_defaults() -> None:
+    """Blank optional eval keys must use defaults instead of failing to parse."""
+    settings = Settings(
+        _env_file=None,
+        **settings_values(),
+        EVAL_JUDGE_MAX_CONCURRENCY="",
+        EVAL_CORPUS_INCLUDES_MULTIMODAL="",
+        EVAL_JUDGE_BASE_URL="",
+    )
+
+    assert settings.eval_judge_max_concurrency == 4
+    assert settings.eval_corpus_includes_multimodal is False
+    assert str(settings.eval_judge_base_url).rstrip("/") == "https://api.sarvam.ai/v1"
+
+
 def test_settings_parses_cors_origins() -> None:
     """Comma-separated CORS origins should be normalized for middleware."""
     settings = Settings(

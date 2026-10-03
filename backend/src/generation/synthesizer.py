@@ -78,40 +78,75 @@ class SarvamCompletionProvider:
         )
 
     async def complete(self, *, system_prompt: str, user_prompt: str) -> CompletionResult:
-        response: Any | None = None
+        """Call Sarvam, recovering once when reasoning exhausts the token budget.
+
+        On ``sarvam-105b`` reasoning tokens are drawn from ``max_tokens`` before
+        any visible content, so a tight budget can return HTTP 200 with
+        ``finish_reason="length"`` and empty ``content`` (the reply is stranded
+        in ``reasoning_content``). That is a budget problem, not an outage, so we
+        retry once with a doubled ceiling before surfacing an error.
+        """
         try:
-            async for attempt in AsyncRetrying(
-                stop=stop_after_attempt(self._max_retries),
-                wait=wait_exponential(multiplier=0.25, min=0.25, max=2),
-                retry=retry_if_exception(is_retryable_sarvam_error),
-                reraise=True,
-            ):
-                with attempt:
-                    response = await self._client.chat.completions(
-                        model=self._model,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        reasoning_effort=self._reasoning_effort,
-                        max_tokens=self._max_tokens,
-                        temperature=0.1,
-                    )
-            if response is None:
-                raise LLMError("Sarvam did not produce a completion response.")
-            content = response.choices[0].message.content
-            if not content:
-                raise LLMError("Sarvam returned an empty answer.")
-            usage = getattr(response, "usage", None)
-            return CompletionResult(
-                text=content,
-                input_tokens=getattr(usage, "prompt_tokens", None),
-                output_tokens=getattr(usage, "completion_tokens", None),
+            result = await self._complete_once(system_prompt, user_prompt, self._max_tokens)
+            if result is not None:
+                return result
+            retry_budget = self._max_tokens * 2
+            logger.warning(
+                "sarvam_truncated_in_reasoning_retrying",
+                max_tokens=self._max_tokens,
+                retry_max_tokens=retry_budget,
+            )
+            result = await self._complete_once(system_prompt, user_prompt, retry_budget)
+            if result is not None:
+                return result
+            raise LLMError(
+                "Sarvam exhausted its token budget on reasoning before answering; "
+                "raise LLM_SYNTH_MAX_TOKENS or disable synthesis reasoning."
             )
         except LLMError:
             raise
         except Exception as exc:
             raise LLMError("Answer synthesis is temporarily unavailable.") from exc
+
+    async def _complete_once(
+        self, system_prompt: str, user_prompt: str, max_tokens: int
+    ) -> CompletionResult | None:
+        """One retried Sarvam call; ``None`` means truncated-in-reasoning (empty content)."""
+        response: Any | None = None
+        async for attempt in AsyncRetrying(
+            stop=stop_after_attempt(self._max_retries),
+            wait=wait_exponential(multiplier=0.25, min=0.25, max=2),
+            retry=retry_if_exception(is_retryable_sarvam_error),
+            reraise=True,
+        ):
+            with attempt:
+                response = await self._client.chat.completions(
+                    model=self._model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    reasoning_effort=self._reasoning_effort,
+                    max_tokens=max_tokens,
+                    temperature=0.1,
+                )
+        if response is None:
+            raise LLMError("Sarvam did not produce a completion response.")
+        choice = response.choices[0]
+        content = choice.message.content
+        if not content:
+            finish_reason = getattr(choice, "finish_reason", None)
+            if finish_reason == "length":
+                # Budget consumed by reasoning: recoverable, signal with None.
+                return None
+            # Empty for any other reason (e.g. content filter): a real failure.
+            raise LLMError("Sarvam returned an empty answer.")
+        usage = getattr(response, "usage", None)
+        return CompletionResult(
+            text=content,
+            input_tokens=getattr(usage, "prompt_tokens", None),
+            output_tokens=getattr(usage, "completion_tokens", None),
+        )
 
 
 def is_retryable_sarvam_error(exc: BaseException) -> bool:
