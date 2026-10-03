@@ -128,6 +128,16 @@ Ingestion reads everything in `data/raw/`. The `--sop-version` flag stamps every
 file in that folder for the run, so ingest versioned SOPs one file at a time.
 The committed sample corpus lives in `data/samples/`.
 
+> **Linking SOP versions — use `--doc-title`.** The `SUPERSEDES` chain between
+> two SOP versions matches on an identical `doc_title`. Pass the same
+> `--doc-title "..."` on every version of the same SOP so they share a title and
+> the chain forms. `--doc-title` applies to every file in `data/raw/` for that
+> run, exactly like `--sop-version` (one logical doc per run). If you omit it,
+> the title falls back to the filename with a trailing version suffix stripped
+> (`expense_approval_sop_v2.md` and `..._v3.md` both become `expense_approval_sop`),
+> so sibling version files still share a title — but the explicit flag is
+> recommended.
+
 ### Clean slate (optional but recommended for a fresh test)
 ```bash
 uv run python scripts/reset_stores.py --yes          # wipes Qdrant collection + Neo4j graph
@@ -143,13 +153,13 @@ Ingest Expense Approval **v2.1 before v3.0** so v3.0 can create the
 ```bash
 cd ~/graph/backend
 
-# 1. Expense Approval v2.1 (older version)
+# 1. Expense Approval v2.1 (older version) — share the same --doc-title with v3.0
 rm -f data/raw/*.md; cp data/samples/expense_approval_sop_v2.md data/raw/
-uv run python scripts/run_ingestion.py --doc-type SOP --sop-version v2.1 --effective-date 2024-03-01
+uv run python scripts/run_ingestion.py --doc-type SOP --sop-version v2.1 --doc-title "Expense Approval SOP" --effective-date 2024-03-01
 
-# 2. Expense Approval v3.0 (current; supersedes v2.1)
+# 2. Expense Approval v3.0 (current; supersedes v2.1) — same --doc-title as v2.1
 rm -f data/raw/*.md; cp data/samples/expense_approval_sop_v3.md data/raw/
-uv run python scripts/run_ingestion.py --doc-type SOP --sop-version v3.0 --effective-date 2025-06-01
+uv run python scripts/run_ingestion.py --doc-type SOP --sop-version v3.0 --doc-title "Expense Approval SOP" --effective-date 2025-06-01
 
 # 3. Onboarding SOP
 rm -f data/raw/*.md; cp data/samples/onboarding_sop_v1.md data/raw/

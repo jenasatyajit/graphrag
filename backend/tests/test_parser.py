@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.api.errors import IngestionError
-from src.ingestion.parser import DocumentParser
+from src.ingestion.parser import DocumentParser, _title_from_stem
 
 
 def test_parser_preserves_narrative_text_page_provenance(tmp_path) -> None:
@@ -52,6 +52,57 @@ def test_parser_accepts_markdown_without_page_numbers(tmp_path) -> None:
     assert document.doc_title == "policy"
     assert len(document.blocks) == 1
     assert document.blocks[0].page_number is None
+
+
+def test_parser_uses_explicit_doc_title_verbatim(tmp_path) -> None:
+    # A version-suffixed filename would otherwise collapse to a stem-derived
+    # title; an explicit doc_title must win untouched.
+    source = tmp_path / "expense_approval_sop_v3.md"
+    source.write_text("# SOP\n\nApprove expenses.", encoding="utf-8")
+    items = [SimpleNamespace(text="Approve expenses.", label=None, prov=[])]
+    converter = SimpleNamespace(
+        convert=lambda path: SimpleNamespace(document=SimpleNamespace(texts=items))
+    )
+
+    document = DocumentParser(converter_factory=lambda: converter).parse(
+        source, doc_type="SOP", doc_title="Expense Approval SOP"
+    )
+
+    assert document.doc_title == "Expense Approval SOP"
+
+
+def test_parser_strips_version_suffix_from_stem_fallback(tmp_path) -> None:
+    # Without an explicit doc_title, sibling version files must collapse to the
+    # same title so the SUPERSEDES chain can match them.
+    source = tmp_path / "expense_approval_sop_v3.md"
+    source.write_text("# SOP\n\nApprove expenses.", encoding="utf-8")
+    items = [SimpleNamespace(text="Approve expenses.", label=None, prov=[])]
+    converter = SimpleNamespace(
+        convert=lambda path: SimpleNamespace(document=SimpleNamespace(texts=items))
+    )
+
+    document = DocumentParser(converter_factory=lambda: converter).parse(source, doc_type="SOP")
+
+    assert document.doc_title == "expense_approval_sop"
+
+
+@pytest.mark.parametrize(
+    ("stem", "expected"),
+    [
+        ("expense_approval_sop_v2", "expense_approval_sop"),
+        ("expense_approval_sop_v3", "expense_approval_sop"),
+        ("report_v2.1", "report"),
+        ("manual-V3", "manual"),
+        ("guide v3.0", "guide"),
+        # Non-version stems must be left exactly as-is.
+        ("returns", "returns"),
+        ("policy", "policy"),
+        ("atlas_5000", "atlas_5000"),
+        ("model_v", "model_v"),
+    ],
+)
+def test_title_from_stem_strips_only_version_suffix(stem: str, expected: str) -> None:
+    assert _title_from_stem(stem) == expected
 
 
 def test_parser_repairs_mojibake(tmp_path) -> None:

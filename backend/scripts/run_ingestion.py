@@ -37,6 +37,7 @@ async def run_ingestion(
     doc_type: DocType,
     sop_version: str | None = None,
     effective_date: date | None = None,
+    doc_title: str | None = None,
 ) -> IngestionSummary:
     """Parse, chunk, embed, and index every supported file in ``data/raw``."""
     parser = DocumentParser(settings=settings, image_output_dir=settings.ingestion_image_dir)
@@ -74,6 +75,7 @@ async def run_ingestion(
                 document = parser.parse(
                     source,
                     doc_type=doc_type,
+                    doc_title=doc_title,
                     sop_version=sop_version if doc_type == "SOP" else None,
                     effective_date=effective_date,
                 )
@@ -187,6 +189,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--doc-type", choices=("SOP", "product_info"), required=True)
     parser.add_argument("--sop-version")
     parser.add_argument("--effective-date", type=date.fromisoformat)
+    parser.add_argument(
+        "--doc-title",
+        help=(
+            "Logical document title shared across versions of the same SOP; "
+            "overrides the filename-derived title. Required to link SOP versions "
+            "via SUPERSEDES."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -200,6 +210,7 @@ def main() -> None:
             doc_type=args.doc_type,
             sop_version=args.sop_version,
             effective_date=args.effective_date,
+            doc_title=args.doc_title,
         )
     )
     print(summary.model_dump_json(indent=2))

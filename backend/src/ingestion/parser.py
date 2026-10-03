@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import re
 import unicodedata
 from collections.abc import Callable
 from datetime import date
@@ -27,6 +28,24 @@ if TYPE_CHECKING:
 DocType = Literal["SOP", "product_info"]
 
 SUPPORTED_SUFFIXES: frozenset[str] = frozenset({".pdf", ".docx", ".md"})
+
+# Matches a trailing version marker on a filename stem (e.g. ``_v2``, ``-V3``,
+# `` v3.0``, ``_v2.1``): a separator, a ``v``, then digits optionally followed by
+# a dotted sub-version. Anchored at end-of-string and kept conservative so a
+# non-version token like ``atlas_5000`` or ``model_v`` is never stripped.
+_VERSION_SUFFIX = re.compile(r"[ _-]v\d+(?:\.\d+)?$", re.IGNORECASE)
+
+
+def _title_from_stem(stem: str) -> str:
+    """Derive a logical title from a filename stem, dropping a version suffix.
+
+    Sibling version files (``expense_approval_sop_v2`` and
+    ``expense_approval_sop_v3``) must collapse to the same ``doc_title`` so the
+    SOP ``SUPERSEDES`` chain can match them. Only a trailing ``v``+number token
+    preceded by a separator is removed; stems without such a marker are returned
+    unchanged.
+    """
+    return _VERSION_SUFFIX.sub("", stem)
 
 
 class ParsedTextBlock(BaseModel):
@@ -221,7 +240,7 @@ class DocumentParser:
 
         return ParsedDocument(
             doc_id=resolved_doc_id,
-            doc_title=(doc_title or path.stem).strip(),
+            doc_title=(doc_title or _title_from_stem(path.stem)).strip(),
             doc_type=doc_type,
             source_path=path,
             blocks=blocks,

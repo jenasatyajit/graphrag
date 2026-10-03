@@ -186,31 +186,35 @@ followed by ingesting only *some* of them is the trap that breaks later question
 uv run python scripts/reset_stores.py --yes
 
 # --- IMPORTANT: both Expense Approval versions must share the same doc_title ---
-# doc_title is derived from the FILENAME. v2 and v3 have different filenames, so
-# name both files identically (in separate folders) or the SUPERSEDES chain will
-# not form. (This was the versioning bug we hit and fixed — see §9 context.)
-mkdir -p data/v2 data/v3 data/onboarding data/product
-cp data/samples/expense_approval_sop_v2.md "data/v2/Expense Approval SOP.md"
-cp data/samples/expense_approval_sop_v3.md "data/v3/Expense Approval SOP.md"
-cp data/samples/onboarding_sop_v1.md        data/onboarding/
-cp data/samples/product_atlas_router.md     data/product/
+# The SUPERSEDES chain matches on an identical doc_title. Pass the same
+# --doc-title "Expense Approval SOP" on BOTH the v2.1 and v3.0 passes so they
+# share a title and the chain forms. (If --doc-title is omitted, a trailing
+# version suffix is stripped from the filename, so expense_approval_sop_v2.md and
+# ..._v3.md still collapse to the same title — but prefer the explicit flag.)
 
 # Pass 1: superseded SOP (v2.1) — must be ingested BEFORE v3
-INGESTION_DATA_DIR=data/v2 uv run python scripts/run_ingestion.py \
-  --doc-type SOP --sop-version v2.1
+rm -f data/raw/*.md; cp data/samples/expense_approval_sop_v2.md data/raw/
+uv run python scripts/run_ingestion.py \
+  --doc-type SOP --sop-version v2.1 --doc-title "Expense Approval SOP" --effective-date 2024-03-01
 
 # Pass 2: current SOP (v3.0) — creates SUPERSEDES v3.0 -> v2.1
-INGESTION_DATA_DIR=data/v3 uv run python scripts/run_ingestion.py \
-  --doc-type SOP --sop-version v3.0
+rm -f data/raw/*.md; cp data/samples/expense_approval_sop_v3.md data/raw/
+uv run python scripts/run_ingestion.py \
+  --doc-type SOP --sop-version v3.0 --doc-title "Expense Approval SOP" --effective-date 2025-06-01
 
 # Pass 3: onboarding SOP (needed for the compliance question)
-INGESTION_DATA_DIR=data/onboarding uv run python scripts/run_ingestion.py \
+rm -f data/raw/*.md; cp data/samples/onboarding_sop_v1.md data/raw/
+uv run python scripts/run_ingestion.py \
   --doc-type SOP --sop-version v1.4
 
 # Pass 4: product info (needed for the Atlas router question)
-INGESTION_DATA_DIR=data/product uv run python scripts/run_ingestion.py \
+rm -f data/raw/*.md; cp data/samples/product_atlas_router.md data/raw/
+uv run python scripts/run_ingestion.py \
   --doc-type product_info
 ```
+
+> Do NOT run `reset_stores.py` between these four passes — each doc adds to the
+> same graph, and v3.0 needs v2.1 already present.
 
 Each run prints a JSON summary. Confirm per run:
 
@@ -391,7 +395,7 @@ curl -X POST http://localhost:8002/query -H "Content-Type: application/json" \
 | Ingestion: `in-process embedding model could not be loaded` | `uv sync --group gpu` not run, or no GPU visible (`nvidia-smi`) |
 | Ingestion pulls an ~8 GB `granite-vision` model | Chart extraction is on; set `DOCLING_EXTRACT_CHARTS=false` unless you need chart→table |
 | First PDF downloads several small models | Normal one-time Docling pipeline setup (OCR/layout/TableFormer); cached afterward |
-| No `SUPERSEDES` edge / no version warning | v2 and v3 ingested under different `doc_title`s (different filenames) or wrong order — name both files identically and ingest v2 before v3 (§5a) |
+| No `SUPERSEDES` edge / no version warning | v2 and v3 ingested under different `doc_title`s or wrong order — pass the same `--doc-title "..."` on both passes and ingest v2 before v3 (§5a) |
 | `tables_extracted`/`images_extracted` stay 0 | Source is Markdown (no tables/pictures) — use a PDF like `chart.pdf` |
 | Ingestion hangs at picture captioning | vLLM not reachable; `curl http://localhost:8000/v1/models` |
 | vLLM won't start (unknown architecture) | vLLM too old for Qwen3-VL: `uv pip install -U vllm` (and maybe `transformers`), or fall back to Qwen2.5-VL-7B |
@@ -448,8 +452,11 @@ Earlier, no `SUPERSEDES` edge formed because the two SOP versions were ingested
 under different `doc_title`s (derived from version-specific filenames), so they
 collapsed onto — or failed to link — a single Process node. Fixed by making the
 Process node MERGE key version-aware (`(name, sop_version)`) in `graph_store.py`,
-and by ingesting both versions under the same filename (§5a). Kept here so the
-filename requirement in §5a isn't mistaken for a typo.
+and by giving `run_ingestion.py` a `--doc-title` flag so both versions can be
+ingested under one shared title (§5a). The parser also strips a trailing version
+suffix from the filename as a fallback when `--doc-title` is omitted, so sibling
+version files still share a title. Kept here so the shared-title requirement in
+§5a isn't mistaken for a typo.
 
 ---
 
