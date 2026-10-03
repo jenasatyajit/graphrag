@@ -11,25 +11,24 @@ from sarvamai import AsyncSarvamAI
 from sarvamai.core.api_error import ApiError
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_exponential
 
+from src.agent.prompts import SYNTHESIS_SYSTEM_PROMPT
 from src.api.config import Settings
 from src.api.errors import LLMError
-from src.generation.provenance import CitableSource, GroundedAnswer, ground_internal_answer
+from src.generation.provenance import CitableSource, GroundedAnswer, ground_answer
 from src.indexing.graph_schema import GraphFact
 from src.indexing.vector_store import RetrievedChunk
+from src.retrieval.web_search import WebResult
 
 logger = structlog.get_logger(__name__)
 
-SYNTHESIS_SYSTEM_PROMPT = """Answer the user's question using ONLY the provided context.
-
-Citation rules (follow exactly):
-- End every sentence that states a fact with one or more citation markers like [1] or [1][3].
-- Put the marker at the END of the sentence, after the period is not required - place it
-  right before the period, e.g. "Managers approve expenses [1]."
-- Do NOT write phrases like "document [1]" or "source [2]" inside the sentence; the marker
-  alone is the reference.
-- Write in plain prose sentences, not bullet lists. Do not number your sentences.
-- If a claim cannot be supported by the context, omit it. If the context is insufficient to
-  answer, reply exactly: "Insufficient context to answer." Never use your own knowledge."""
+__all__ = [
+    "SYNTHESIS_SYSTEM_PROMPT",
+    "AnswerSynthesizer",
+    "CompletionProvider",
+    "CompletionResult",
+    "SarvamCompletionProvider",
+    "is_retryable_sarvam_error",
+]
 
 
 class _Unset:
@@ -84,7 +83,7 @@ class SarvamCompletionProvider:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(self._max_retries),
                 wait=wait_exponential(multiplier=0.25, min=0.25, max=2),
-                retry=retry_if_exception(_is_retryable_sarvam_error),
+                retry=retry_if_exception(is_retryable_sarvam_error),
                 reraise=True,
             ):
                 with attempt:
@@ -115,7 +114,8 @@ class SarvamCompletionProvider:
             raise LLMError("Answer synthesis is temporarily unavailable.") from exc
 
 
-def _is_retryable_sarvam_error(exc: BaseException) -> bool:
+def is_retryable_sarvam_error(exc: BaseException) -> bool:
+    """Return whether a Sarvam failure is transient (network, 429, or 5xx)."""
     if isinstance(exc, (httpx.TransportError, TimeoutError)):
         return True
     return isinstance(exc, ApiError) and (
@@ -135,7 +135,15 @@ class AnswerSynthesizer:
         sources: list[RetrievedChunk],
         *,
         graph_facts: list[GraphFact] | None = None,
+        web_results: list[WebResult] | None = None,
+        conversation_context: str | None = None,
     ) -> GroundedAnswer:
+        """Answer from numbered internal + external sources, then ground it.
+
+        ``conversation_context`` is prior-turn text shown only to resolve the
+        question; it is deliberately *not* numbered, so it can never be cited
+        and any claim resting on it alone is dropped by the grounding step.
+        """
         # Reranked chunks are numbered first (they carry the rerank ordering);
         # graph facts are appended after as additional citable sources. Graph
         # facts bypass the reranker deliberately - they are already precise,
@@ -150,6 +158,9 @@ class AnswerSynthesizer:
             CitableSource.from_graph_fact(fact, chunk_lookup=chunk_lookup)
             for fact in (graph_facts or [])
         )
+        # External web results are numbered last so internal evidence keeps the
+        # lowest (most prominent) markers.
+        citable.extend(CitableSource.from_web(result) for result in (web_results or []))
 
         if not citable:
             return GroundedAnswer(
@@ -158,18 +169,28 @@ class AnswerSynthesizer:
             )
 
         context = "\n\n".join(
-            f"[{index}] Document: {source.doc_title}\n{source.text}"
+            f"[{index}] {source.context_label()}\n{source.text}"
             for index, source in enumerate(citable, start=1)
         )
+        parts: list[str] = []
+        if conversation_context:
+            parts.append(
+                "Conversation so far (background only - NOT a source, never cite it):\n"
+                f"{conversation_context}"
+            )
+        parts.append(f"Question:\n{question.strip()}")
+        parts.append(f"Numbered sources:\n{context}")
         completion = await self._completion_provider.complete(
             system_prompt=SYNTHESIS_SYSTEM_PROMPT,
-            user_prompt=f"Question:\n{question.strip()}\n\nNumbered sources:\n{context}",
+            user_prompt="\n\n".join(parts),
         )
-        grounded = ground_internal_answer(completion.text, citable)
+        grounded = ground_answer(completion.text, citable)
         logger.info(
             "answer_synthesized",
             source_count=len(sources),
             graph_fact_count=len(graph_facts or []),
+            web_result_count=len(web_results or []),
+            has_conversation_context=bool(conversation_context),
             citation_count=len(grounded.citations),
             flagged_claim_count=len(grounded.flagged_claims),
             input_tokens=completion.input_tokens,

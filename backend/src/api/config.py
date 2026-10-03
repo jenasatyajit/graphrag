@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,6 +49,19 @@ class Settings(BaseSettings):
     llm_extract_reasoning_effort: str | None = "medium"
     llm_extract_max_tokens: int = Field(default=8192, gt=0)
     max_agent_iterations: int = Field(default=3, gt=0)
+    # Phase 5 router. Router/rewrite/direct-answer calls run with reasoning
+    # disabled (llm_router_reasoning_effort=None) so a small budget suffices.
+    llm_router_max_tokens: int = Field(default=1024, gt=0)
+    # Minimum reranker relevance score for an internal chunk to count as
+    # relevant evidence. Below it, the router guardrail escalates to web search.
+    internal_relevance_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
+
+    # Phase 5 Exa live web search (results are per-request only, never stored).
+    exa_search_type: Literal["auto", "fast", "instant"] = "auto"
+    exa_num_results: int = Field(default=5, gt=0, le=25)
+    exa_highlight_max_characters: int = Field(default=1500, gt=0)
+    exa_request_timeout_seconds: float = Field(default=20.0, gt=0)
+    exa_max_retries: int = Field(default=2, gt=0, le=10)
 
     neo4j_database: str = "neo4j"
     graph_query_timeout_seconds: float = Field(default=15.0, gt=0)
@@ -92,6 +105,10 @@ class Settings(BaseSettings):
     ingestion_image_dir: Path = Path("data/processed/images")
     conversation_store: Literal["memory", "sqlite"] = "memory"
     conversation_history_max_turns: int = Field(default=20, gt=0)
+    conversation_db_path: Path = Path("data/processed/conversations.db")
+    conversation_ttl_hours: float = Field(default=24.0, gt=0)
+    # Prior turns shown to the follow-up rewriter and the synthesizer.
+    conversation_context_turns: int = Field(default=3, gt=0, le=20)
     app_environment: Literal["development", "production", "test"] = "development"
     cors_origins_raw: str = Field(default="", validation_alias="CORS_ORIGINS")
 
@@ -127,6 +144,23 @@ class Settings(BaseSettings):
                 continue
             cleaned[key] = value
         return cleaned
+
+    @field_validator(
+        "llm_router_reasoning_effort",
+        "llm_synth_reasoning_effort",
+        "llm_extract_reasoning_effort",
+        mode="before",
+    )
+    @classmethod
+    def _null_reasoning_effort(cls, value: Any) -> Any:
+        """Map the literal strings "null"/"none" (as written in SPEC 5) to ``None``.
+
+        Sarvam disables reasoning only for a real ``None``; forwarding the string
+        "null" would be rejected by the API.
+        """
+        if isinstance(value, str) and value.strip().lower() in {"null", "none"}:
+            return None
+        return value
 
     @property
     def cors_origins(self) -> list[str]:

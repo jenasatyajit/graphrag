@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from datetime import timedelta
 from typing import Any, Literal, TypedDict, cast
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 
+from src.agent.llm import RouterDecision, ToolCall
+from src.agent.memory import InMemoryConversationStore
 from src.api.config import Settings
 from src.api.main import create_app
 from src.api.schemas import ComponentHealth
@@ -16,6 +19,7 @@ from src.generation.synthesizer import CompletionResult
 from src.indexing.embeddings import EmbeddingMode, EmbeddingResponse, SparseEmbedding
 from src.indexing.vector_store import RetrievedChunk
 from src.ingestion.chunker import Chunk
+from src.retrieval.web_search import WebResult, WebSearchOutcome
 
 
 class TestSettingsValues(TypedDict):
@@ -139,6 +143,46 @@ class FakeCompletionProvider:
         return CompletionResult(text="Managers approve expenses above $500 [1].")
 
 
+class ScriptedRouterLLM:
+    """Fake tool-calling router returning scripted decisions, then DONE."""
+
+    def __init__(self, *decisions: RouterDecision) -> None:
+        self._decisions = list(decisions)
+        self.calls: list[dict[str, Any]] = []
+
+    async def decide(
+        self,
+        messages: Sequence[dict[str, Any]],
+        *,
+        tools: Sequence[dict[str, Any]],
+        tool_choice: str,
+    ) -> RouterDecision:
+        self.calls.append({"messages": list(messages), "tool_choice": tool_choice})
+        if self._decisions:
+            return self._decisions.pop(0)
+        return RouterDecision(content="DONE")
+
+
+def tool_decision(*names: str, query: str = "q") -> RouterDecision:
+    return RouterDecision(
+        tool_calls=[
+            ToolCall(id=f"c{i}", name=name, arguments={"query": query})
+            for i, name in enumerate(names)
+        ]
+    )
+
+
+class FakeWebSearch:
+    def __init__(self, results: list[WebResult] | None = None, *, failed: bool = False) -> None:
+        self._results = results or []
+        self._failed = failed
+        self.queries: list[str] = []
+
+    async def search(self, query: str) -> WebSearchOutcome:
+        self.queries.append(query)
+        return WebSearchOutcome(query=query, results=list(self._results), failed=self._failed)
+
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings(_env_file=None, **settings_values())
@@ -161,6 +205,9 @@ def client(
         embedding_provider=FakeEmbeddingProvider(),
         completion_provider=FakeCompletionProvider(),
         reranker=FakeReranker(),
+        router_llm=ScriptedRouterLLM(tool_decision("internal_search")),
+        web_searcher=FakeWebSearch(),
+        conversation_store=InMemoryConversationStore(max_turns=20, ttl=timedelta(hours=1)),
     )
     with TestClient(app) as test_client:
         yield test_client

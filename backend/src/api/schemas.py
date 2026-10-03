@@ -50,13 +50,20 @@ class QueryRequest(BaseModel):
 
 
 class QueryResponse(BaseModel):
-    """Phase 1 response matching the stable SPEC API contract."""
+    """SPEC 8 response, plus the server-issued ``conversation_id`` and notices.
+
+    ``conversation_id`` must be sent back on the next request to continue the
+    conversation (deviation D-15). ``notices`` carries non-claim status messages,
+    e.g. that live web search was unavailable.
+    """
 
     answer: str
     citations: list[Citation]
     used_web_search: bool = False
     version_warning: str | None = None
     tool_trace: list[str]
+    conversation_id: str
+    notices: list[str] = Field(default_factory=list)
 
 
 class IngestionSummary(BaseModel):

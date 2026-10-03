@@ -11,12 +11,15 @@ when any cited source is a superseded SOP.
 from __future__ import annotations
 
 import re
+from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from src.api.schemas import Citation, CitationReference
 from src.indexing.graph_schema import GraphFact
 from src.indexing.vector_store import RetrievedChunk
+from src.retrieval.web_search import WebResult
 
 # One or more adjacent citation markers, e.g. "[1]", "[1][2]", "[1, 2]" or "[1] [2]".
 _CITATION_RE = re.compile(r"\[\s*\d+(?:\s*,\s*\d+)*\s*]")
@@ -49,6 +52,32 @@ class CitableSource(BaseModel):
     sop_version: str | None = None
     is_current_version: bool = True
     origin: str = "internal_chunk"
+    source_tier: Literal["internal", "external"] = "internal"
+    url: str | None = None
+    retrieved_at: datetime | None = None
+
+    @classmethod
+    def from_web(cls, result: WebResult) -> CitableSource:
+        """Build an external source from a per-request Exa result."""
+        return cls(
+            text=result.snippet,
+            doc_title=result.title,
+            origin="web_result",
+            source_tier="external",
+            url=result.url,
+            retrieved_at=result.retrieved_at,
+        )
+
+    def context_label(self) -> str:
+        """Header for this source in the numbered synthesis context."""
+        if self.source_tier == "external":
+            return f"Web (external): {self.doc_title} ({self.url})"
+        label = f"Internal document: {self.doc_title}"
+        if self.sop_version:
+            label += f" (version {self.sop_version})"
+        if not self.is_current_version:
+            label += " [SUPERSEDED - a newer version exists]"
+        return label
 
     @classmethod
     def from_chunk(cls, retrieved: RetrievedChunk) -> CitableSource:
@@ -123,8 +152,12 @@ def build_version_warning(citations: list[Citation]) -> str | None:
     )
 
 
-def ground_internal_answer(raw_answer: str, sources: list[CitableSource]) -> GroundedAnswer:
-    """Keep only claims carrying valid ``[n]`` references to supplied chunks."""
+def ground_answer(raw_answer: str, sources: list[CitableSource]) -> GroundedAnswer:
+    """Keep only claims carrying valid ``[n]`` references to supplied sources.
+
+    Each citation takes its ``source_tier`` from the cited source, so internal
+    chunks/graph facts and external web results stay distinguishable (SPEC 6.3).
+    """
     stripped = raw_answer.strip()
     if not stripped:
         return GroundedAnswer(
@@ -161,22 +194,11 @@ def ground_internal_answer(raw_answer: str, sources: list[CitableSource]) -> Gro
             continue
         for source_index in valid_indices:
             source = sources[source_index]
-            key = (prose, source.chunk_id)
+            key = (prose, source.chunk_id or source.url or f"#{source_index}")
             if key in seen_citations:
                 continue
             seen_citations.add(key)
-            citations.append(
-                Citation(
-                    claim_text=prose,
-                    source_tier="internal",
-                    reference=CitationReference(
-                        chunk_id=source.chunk_id,
-                        doc_title=source.doc_title,
-                        sop_version=source.sop_version,
-                        is_current_version=source.is_current_version,
-                    ),
-                )
-            )
+            citations.append(_citation(prose, source))
 
     if not citations:
         return GroundedAnswer(
@@ -190,6 +212,27 @@ def ground_internal_answer(raw_answer: str, sources: list[CitableSource]) -> Gro
         flagged_claims=flagged,
         version_warning=build_version_warning(citations),
     )
+
+
+# Backwards-compatible name used by Phase 1-4 callers and tests.
+ground_internal_answer = ground_answer
+
+
+def _citation(prose: str, source: CitableSource) -> Citation:
+    if source.source_tier == "external":
+        reference = CitationReference(
+            doc_title=source.doc_title,
+            url=source.url,
+            retrieved_at=source.retrieved_at,
+        )
+    else:
+        reference = CitationReference(
+            chunk_id=source.chunk_id,
+            doc_title=source.doc_title,
+            sop_version=source.sop_version,
+            is_current_version=source.is_current_version,
+        )
+    return Citation(claim_text=prose, source_tier=source.source_tier, reference=reference)
 
 
 def _valid_source_indices(segment: str, source_count: int) -> list[int]:

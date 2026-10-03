@@ -126,7 +126,7 @@ def test_graph_fact_cites_real_document_when_chunk_known() -> None:
 class FakeCompletionProvider:
     async def complete(self, *, system_prompt: str, user_prompt: str) -> CompletionResult:
         assert "ONLY" in system_prompt
-        assert "[1] Document: Refund SOP" in user_prompt
+        assert "[1] Internal document: Refund SOP (version v3.0)" in user_prompt
         return CompletionResult(text="Refunds require manager approval [1].")
 
 

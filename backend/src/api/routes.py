@@ -37,14 +37,16 @@ async def health_check(request: Request, response: Response) -> HealthResponse:
 
 @router.post("/query", response_model=QueryResponse, tags=["query"])
 async def query(payload: QueryRequest, request: Request) -> QueryResponse:
-    """Call the Phase 1 RAG service; routing arrives in Phase 5."""
-    grounded = await request.app.state.query_service.query(payload.question)
+    """Delegate to the router agent; all business logic lives in ``src.agent``."""
+    result = await request.app.state.agent.answer(payload.question, payload.conversation_id)
     return QueryResponse(
-        answer=grounded.answer,
-        citations=grounded.citations,
-        used_web_search=False,
-        version_warning=getattr(grounded, "version_warning", None),
-        tool_trace=["internal_search"],
+        answer=result.answer,
+        citations=result.citations,
+        used_web_search=result.used_web_search,
+        version_warning=result.version_warning,
+        tool_trace=result.tool_trace,
+        conversation_id=result.conversation_id,
+        notices=result.notices,
     )
 
 

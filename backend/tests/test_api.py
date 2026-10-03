@@ -40,6 +40,8 @@ def test_post_query_returns_spec_response_shape(client: TestClient) -> None:
     assert payload["used_web_search"] is False
     assert payload["version_warning"] is None
     assert payload["tool_trace"] == ["internal_search"]
+    assert payload["conversation_id"]
+    assert payload["notices"] == []
 
 
 def test_request_id_is_generated_and_echoed(client: TestClient) -> None:

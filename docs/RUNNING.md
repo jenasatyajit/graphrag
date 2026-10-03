@@ -260,7 +260,28 @@ curl http://127.0.0.1:8000/ingest
 - `answer` with inline `[n]` markers
 - `citations[]` — each is chunk-based (`reference.chunk_id`, `doc_title`)
 - `version_warning` — set when a superseded SOP chunk is cited
-- `tool_trace` — `["internal_search"]` (the tool-calling router arrives in Phase 5)
+- `tool_trace` — tools the router ran, in order (e.g. `["internal_search"]`,
+  `["web_search"]`, `["internal_search", "web_search"]`, `["answer_directly"]`)
+- `used_web_search` — true when external web results were part of the evidence;
+  web citations have `source_tier: "external"` plus `reference.url` and `retrieved_at`
+- `conversation_id` — server-issued; send it back to continue the conversation
+- `notices` — status messages that aren't claims (e.g. web search unavailable)
+
+### Phase 5: web routing and multi-turn
+
+```powershell
+# Explicitly external -> web_search, citations labelled external
+curl -X POST http://127.0.0.1:8000/query -H "Content-Type: application/json" `
+  -d '{\"question\": \"What are the current EU AI Act obligations for general-purpose AI providers?\", \"conversation_id\": null}'
+
+# Follow-up: pass the conversation_id returned by the previous call
+curl -X POST http://127.0.0.1:8000/query -H "Content-Type: application/json" `
+  -d '{\"question\": \"What is the manager review threshold for expenses?\", \"conversation_id\": null}'
+curl -X POST http://127.0.0.1:8000/query -H "Content-Type: application/json" `
+  -d '{\"question\": \"what about the previous version?\", \"conversation_id\": \"<id from above>\"}'
+```
+The server log shows `follow_up_rewritten`, `router_decision`, and one `router_tool_call` line per tool.
+Set `CONVERSATION_STORE=sqlite` to keep conversations across restarts.
 
 ---
 
@@ -280,7 +301,9 @@ uv run pyrefly check
 - **OpenRouter placeholder key** → reranking fails and falls back to RRF order
   (logged as `rerank_fallback_to_rrf`). Answers still work; add a real key to
   exercise reranking.
-- **Exa** is not used in the query path until Phase 5; its placeholder is fine.
+- **Exa** needs a valid `EXA_API_KEY` for web routing. With a bad key, web calls log
+  `web_search_failed` (401) and answers come from internal docs plus an "unavailable"
+  notice. If internal retrieval is also down, `/query` returns 503.
 - **AuraDB free tier auto-pauses when idle** — if `/health` shows neo4j
   `unhealthy` after a break, resume the instance in the Aura console.
 - **Extraction latency** — each chunk is one Sarvam call (~10-20s at `medium`).

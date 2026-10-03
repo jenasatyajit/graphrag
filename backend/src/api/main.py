@@ -10,7 +10,9 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.agent.router import HybridRagService, IngestionStatusService
+from src.agent.llm import SarvamToolCallingProvider, ToolCallingProvider
+from src.agent.memory import ConversationStore, FollowUpRewriter, build_conversation_store
+from src.agent.router import AgentRouter, HybridRagService, IngestionStatusService
 from src.api.config import Settings
 from src.api.errors import RetrievalError, register_exception_handlers
 from src.api.logging import configure_logging
@@ -24,6 +26,7 @@ from src.indexing.vector_store import VectorStore
 from src.retrieval.graph_search import GraphSearchService
 from src.retrieval.hybrid_search import HybridSearchService
 from src.retrieval.reranker import OpenRouterReranker, Reranker
+from src.retrieval.web_search import ExaWebSearch, WebSearcher
 
 
 class MissingEmbeddingService:
@@ -37,11 +40,11 @@ class MissingEmbeddingService:
         )
 
 
-class UnconfiguredQueryService:
-    """Query service used when no embedding provider is configured."""
+class UnconfiguredAgent:
+    """Agent used when no embedding provider is configured."""
 
-    async def query(self, question: str) -> None:
-        del question
+    async def answer(self, question: str, conversation_id: str | None = None) -> None:
+        del question, conversation_id
         raise RetrievalError("The query embedding service is not configured.")
 
 
@@ -66,10 +69,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         embedder = app.state.embedding_provider
         if embedder is not None:
             await close_embedding_provider(embedder)
-        reranker = app.state.reranker
-        close_reranker = getattr(reranker, "aclose", None)
-        if close_reranker is not None:
-            await close_reranker()
+        for owned in (app.state.reranker, app.state.web_searcher):
+            close_owned = getattr(owned, "aclose", None)
+            if close_owned is not None:
+                await close_owned()
+        await app.state.conversation_store.close()
         logger.info("application_stopped")
 
 
@@ -81,6 +85,9 @@ def create_app(
     embedding_provider: Any | None = None,
     completion_provider: Any | None = None,
     reranker: Reranker | None = None,
+    router_llm: ToolCallingProvider | None = None,
+    web_searcher: WebSearcher | None = None,
+    conversation_store: ConversationStore | None = None,
 ) -> FastAPI:
     """Create the configured CPU-only query API application."""
     active_settings = settings or Settings()
@@ -106,6 +113,16 @@ def create_app(
         max_tokens=active_settings.llm_extract_max_tokens,
     )
     graph_search = GraphSearchService(active_graph_store, entity_extractor)
+    # Router-adjacent calls (follow-up rewrite, direct answers) are cheap
+    # classification-style calls: reasoning disabled, small token budget.
+    fast_completion = completion_provider or SarvamCompletionProvider(
+        active_settings,
+        reasoning_effort=active_settings.llm_router_reasoning_effort,
+        max_tokens=active_settings.llm_router_max_tokens,
+    )
+    active_router_llm = router_llm or SarvamToolCallingProvider(active_settings)
+    active_web = web_searcher or ExaWebSearch(active_settings)
+    active_store = conversation_store or build_conversation_store(active_settings)
 
     app = FastAPI(
         title="Graph-Augmented Multimodal Company-Knowledge QA API",
@@ -118,15 +135,25 @@ def create_app(
     app.state.embedding_provider = embedding_provider
     app.state.embedding_health = embedding_health
     app.state.reranker = active_reranker
+    app.state.web_searcher = active_web
+    app.state.conversation_store = active_store
     if embedding_provider is None:
-        app.state.query_service = UnconfiguredQueryService()
+        app.state.agent = UnconfiguredAgent()
     else:
         hybrid_search = HybridSearchService(embedding_provider, active_vector_store)
-        app.state.query_service = HybridRagService(
-            hybrid_search,
-            active_reranker,
-            synthesizer,
-            graph_search,
+        internal = HybridRagService(hybrid_search, active_reranker, synthesizer, graph_search)
+        app.state.agent = AgentRouter(
+            router_llm=active_router_llm,
+            internal=internal,
+            web=active_web,
+            synthesizer=synthesizer,
+            direct_responder=fast_completion,
+            conversation_store=active_store,
+            rewriter=FollowUpRewriter(fast_completion),
+            max_iterations=active_settings.max_agent_iterations,
+            relevance_threshold=active_settings.internal_relevance_threshold,
+            context_turns=active_settings.conversation_context_turns,
+            max_internal_sources=active_settings.rerank_top_n * 2,
         )
     app.state.ingestion_status = IngestionStatusService(active_settings.ingestion_summary_path)
 
