@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
+from src.api.config import Settings
 from src.evaluation.golden_set import GoldenItem
 from src.evaluation.ragas_eval import (
     MetricBundle,
     PipelineAnswer,
     RagasEvaluator,
+    build_sarvam_judge,
 )
+from tests.conftest import settings_values
 
 
 class _Score:
@@ -149,3 +154,62 @@ async def test_aggregate_is_none_when_metric_never_succeeds() -> None:
     result = await evaluator.evaluate(items, _answers(items))
 
     assert result.aggregate.answer_relevancy is None
+
+
+class _FakeAsyncOpenAI:
+    """Capture AsyncOpenAI construction kwargs instead of opening a connection."""
+
+    last_kwargs: ClassVar[dict[str, object]] = {}
+
+    def __init__(self, **kwargs: object) -> None:
+        type(self).last_kwargs = kwargs
+
+
+_FACTORY_CALLS: list[dict[str, object]] = []
+
+
+def _fake_llm_factory(model: str, **kwargs: object) -> object:
+    """Capture llm_factory args so the test can assert model params threaded through."""
+    call = {"model": model, **kwargs}
+    _FACTORY_CALLS.append(call)
+    return call
+
+
+def test_build_sarvam_judge_threads_max_tokens_and_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openai
+    import ragas.llms as ragas_llms
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _FakeAsyncOpenAI)
+    monkeypatch.setattr(ragas_llms, "llm_factory", _fake_llm_factory)
+    _FACTORY_CALLS.clear()
+
+    settings = Settings(
+        _env_file=None,
+        **settings_values(),
+        EVAL_JUDGE_MAX_TOKENS="2048",
+        # The literal string "null" must map to Python None (reasoning disabled).
+        EVAL_JUDGE_REASONING_EFFORT="null",
+    )
+    assert settings.eval_judge_reasoning_effort is None
+
+    build_sarvam_judge(settings)
+
+    # Model params are forwarded to llm_factory (ragas threads them into every
+    # chat.completions.create call) with reasoning disabled.
+    assert len(_FACTORY_CALLS) == 1
+    factory_call = _FACTORY_CALLS[0]
+    assert factory_call["model"] == settings.eval_judge_model
+    assert factory_call["provider"] == "openai"
+    assert isinstance(factory_call["client"], _FakeAsyncOpenAI)
+    assert factory_call["max_tokens"] == 2048
+    assert factory_call["reasoning_effort"] is None
+
+    # The Sarvam auth caveat and base_url are preserved on the client.
+    client_kwargs = _FakeAsyncOpenAI.last_kwargs
+    key = settings.sarvam_api_key.get_secret_value()
+    assert client_kwargs["base_url"] == str(settings.eval_judge_base_url)
+    assert client_kwargs["api_key"] == key
+    assert client_kwargs["default_headers"] == {"api-subscription-key": key}
+    assert client_kwargs["timeout"] == settings.eval_judge_timeout_seconds

@@ -137,7 +137,18 @@ def build_sarvam_judge(settings: Settings) -> InstructorBaseRagasLLM:
         default_headers={"api-subscription-key": key},
         timeout=settings.eval_judge_timeout_seconds,
     )
-    return llm_factory(settings.eval_judge_model, provider="openai", client=client)
+    # ragas 0.4.3 forwards llm_factory kwargs into InstructorLLM.model_args and
+    # straight into every ``chat.completions.create`` call. sarvam-105b spends
+    # reasoning tokens from max_tokens BEFORE the verdict JSON, so a generous
+    # budget plus reasoning disabled (reasoning_effort=None) keeps the structured
+    # output from truncating. This mirrors the synthesizer's sarvam-105b handling.
+    return llm_factory(
+        settings.eval_judge_model,
+        provider="openai",
+        client=client,
+        max_tokens=settings.eval_judge_max_tokens,
+        reasoning_effort=settings.eval_judge_reasoning_effort,
+    )
 
 
 def build_default_metrics(

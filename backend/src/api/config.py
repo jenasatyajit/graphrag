@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     eval_judge_base_url: AnyHttpUrl = AnyHttpUrl("https://api.sarvam.ai/v1")
     eval_judge_max_concurrency: int = Field(default=4, gt=0, le=32)
     eval_judge_timeout_seconds: float = Field(default=60.0, gt=0)
+    # The judge is sarvam-105b, where reasoning tokens are drawn from max_tokens
+    # BEFORE the visible verdict. RAGAS collection metrics ask for structured
+    # JSON; with reasoning on, the budget is spent before the JSON finishes and
+    # ragas reports "output is incomplete due to a max_tokens length limit".
+    # Disabling reasoning (None) and allowing a generous budget fixes it.
+    eval_judge_max_tokens: int = Field(default=4096, gt=0)
+    eval_judge_reasoning_effort: str | None = None
     # Documents whether the live corpus contains table/image_caption chunks, so
     # the ablation runner can label the +graph+multimodal stage honestly (there
     # is no query-time switch that disables multimodal chunks).
@@ -168,6 +175,7 @@ class Settings(BaseSettings):
         "llm_router_reasoning_effort",
         "llm_synth_reasoning_effort",
         "llm_extract_reasoning_effort",
+        "eval_judge_reasoning_effort",
         mode="before",
     )
     @classmethod
