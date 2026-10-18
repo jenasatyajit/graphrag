@@ -139,3 +139,20 @@ uv run pytest -m integration
 
 Do not run integration tests in a tight loop — Exa, OpenRouter, and Sarvam are
 metered (SPEC §13).
+
+## Frontend
+
+A standalone Streamlit app lives in [`frontend/`](frontend/). It is deployed to
+Streamlit Community Cloud and talks to the public query API over HTTP via its
+`API_BASE_URL` secret (set in the Community Cloud Secrets dashboard). It is not
+part of the backend `uv` project and has its own pinned `requirements.txt`
+(`streamlit`, `httpx`). See [`frontend/README.md`](frontend/README.md) to run it
+locally or deploy it.
+
+### Deferred frontend decisions
+
+- **Multimodal / original image display** is not shown yet. Adding it later needs
+  a backend endpoint to serve image files; recorded for future work.
+- **Eval reports** are read from a committed markdown file for now. This will move
+  to a `GET /eval/report` backend endpoint later.
+- **The public API has no auth.** A shared-token guard is possible future work.
