@@ -75,6 +75,13 @@ class ValidationError(AppError):
     status_code = 422
 
 
+class ConflictError(AppError):
+    """Raised when a request conflicts with current server state (e.g. a busy job)."""
+
+    code = "conflict"
+    status_code = 409
+
+
 def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "unknown")
 

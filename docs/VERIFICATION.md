@@ -446,6 +446,33 @@ prefer the graph fact's own `chunk_id` source document when resolving the citati
 rather than the top reranked chunk. Add a regression test with an onboarding-vs-
 expense disambiguation case.
 
+**Resolved (2026-10).** Two fixes landed in the backend:
+
+- `GraphStore.match_entities` no longer uses the loose bidirectional `CONTAINS`
+  result directly. It keeps a parameterized containment pre-filter (read routing,
+  `database_` passed) but then runs a Python token-overlap/specificity rule
+  (`_best_entity_match`): exact token-set equality wins; otherwise one side's
+  tokens must fully contain the other's, a bare single-word candidate may not
+  expand into a larger node (killing the `"Employee"` → `"Employee Onboarding"`
+  leak), and spec-label/SKU nodes (`ATL-5000`, `Target`, `Throughput`,
+  `Port Count`, `Simultaneous Tunnels`) no longer match a product candidate.
+  Legitimate fuzzy matches (`"SAP system"` → `SAP`, `"Finance Approval"` → the
+  step node) still resolve.
+- `CitableSource.from_graph_fact` now resolves a graph fact across *all* of its
+  `chunk_ids` and returns the real document's `doc_title`/version/current-flag.
+  When no chunk id is among the retrieved sources the fact is **dropped** instead
+  of emitting the synthetic `"Knowledge graph"` label; the synthesizer skips such
+  facts. This removes the misleading generic citation and the spurious version
+  warning it could trigger, while the legitimate superseded-version warning (a
+  real v2.1 chunk cited) still fires.
+
+A read-only graph `doc_title` lookup helper was intentionally **not** added:
+non-`Process` graph nodes (`Product`/`Feature`/`Spec`/`Step`/`Role`/`System`/
+`ComplianceRequirement`) store no `doc_title`, so a per-fact Neo4j lookup could
+not resolve one anyway and would only add a query-time round-trip and failure
+surface. Regression tests: `tests/test_entity_matching.py` and the graph-fact
+provenance cases in `tests/test_citation_grounding.py` / `tests/test_graph_search.py`.
+
 ### 9.2 Note on the versioning fix (already resolved, for context)
 
 Earlier, no `SUPERSEDES` edge formed because the two SOP versions were ingested

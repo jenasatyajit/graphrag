@@ -11,6 +11,7 @@ degrade gracefully (query path) or fail the batch (ingestion).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -178,12 +179,21 @@ class GraphStore:
     async def match_entities(self, names: Sequence[str]) -> list[str]:
         """Fuzzy-match candidate names to existing node names (case-insensitive).
 
-        Matches on containment in either direction so "SAP system" finds a "SAP"
-        node and vice versa. Returns the matched canonical node names.
+        A parameterized Cypher pre-filter pulls the containment candidates (so we
+        never scan the whole graph), then :func:`_best_entity_match` picks the
+        single best node per candidate using token-overlap and specificity rules.
+        This keeps legitimate fuzzy matches ("SAP system" -> "SAP",
+        "Finance Approval" -> the step node) while rejecting the loose
+        bidirectional-``CONTAINS`` matches that leaked wrong nodes ("Employee" ->
+        "Employee Onboarding") and spec-label/SKU nodes. Returns the matched
+        canonical node names, de-duplicated preserving first-seen order.
         """
         cleaned = [name.strip() for name in names if name.strip()]
         if not cleaned:
             return []
+        # Pre-filter with bidirectional containment only (parameterized, read
+        # routing via ``_run`` which passes ``database_``); the precise matching
+        # rule runs in Python over the candidate node names below.
         cypher = """
         UNWIND $names AS candidate
         MATCH (n)
@@ -193,14 +203,16 @@ class GraphStore:
             OR toLower(candidate) CONTAINS toLower(n.name)
           )
         RETURN DISTINCT n.name AS name
-        LIMIT $limit
         """
-        records = await self._run(
-            cypher,
-            {"names": cleaned, "limit": self._entity_match_limit},
-            write=False,
-        )
-        return [str(record["name"]) for record in records]
+        records = await self._run(cypher, {"names": cleaned}, write=False)
+        node_names = [str(record["name"]) for record in records]
+
+        matched: list[str] = []
+        for candidate in cleaned:
+            best = _best_entity_match(candidate, node_names)
+            if best is not None and best not in matched:
+                matched.append(best)
+        return matched[: self._entity_match_limit]
 
     async def neighborhood_facts(self, node_names: Sequence[str]) -> list[GraphFact]:
         """Return facts within ``max_hops`` of the seed nodes as citable triples.
@@ -291,6 +303,75 @@ class GraphStore:
             raise
         except Exception as exc:
             raise GraphError("A Neo4j graph operation failed.") from exc
+
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercase ``text`` and split it into alphanumeric tokens (order kept)."""
+    return _TOKEN_RE.findall(text.lower())
+
+
+def _best_entity_match(candidate: str, node_names: Sequence[str]) -> str | None:
+    """Pick the single most-specific node name that matches ``candidate``.
+
+    Matching rules (applied to case-insensitive alphanumeric token sets):
+
+    * Exact (case-insensitive) name equality always wins.
+    * Otherwise one side's token set must fully contain the other's, and the
+      contained side must carry every one of its tokens into the longer side
+      (ratio ``1.0``) — a bare substring of a single token is not a match.
+    * A single-token candidate only matches a multi-token node when the node is
+      a *specialization* (candidate tokens are a subset of the node tokens),
+      never the reverse, so a bare "Employee" never expands to
+      "Employee Onboarding".
+    * A single-token node only matches a multi-token candidate when that node's
+      lone token is present in the candidate (e.g. "SAP" <- "SAP system").
+
+    Among the survivors the longest token overlap wins, tie-broken by the
+    longest node name, so "Employee Onboarding" beats "Employee". Returns the
+    canonical node name, or ``None`` when nothing matches.
+    """
+    cand_tokens = _tokenize(candidate)
+    if not cand_tokens:
+        return None
+    cand_set = set(cand_tokens)
+
+    best: str | None = None
+    best_key: tuple[int, int] = (-1, -1)
+    for node_name in node_names:
+        node_tokens = _tokenize(node_name)
+        if not node_tokens:
+            continue
+        node_set = set(node_tokens)
+
+        if cand_set == node_set:
+            # Exact token-set equality (covers case-insensitive name equality).
+            overlap = len(cand_set)
+            key = (overlap + 1, len(node_name))  # +1 so an exact match outranks subsets
+        elif cand_set < node_set and len(cand_set) > 1:
+            # Node is a specialization of a *multi-word* candidate (candidate
+            # tokens ⊆ node). A bare single-word candidate is deliberately NOT
+            # allowed to expand into a larger node (the §9.1 "Employee" ->
+            # "Employee Onboarding" leak); only exact equality can match it.
+            overlap = len(cand_set)
+            key = (overlap, len(node_name))
+        elif node_set < cand_set:
+            # Candidate is more specific than the node (node tokens ⊆ candidate):
+            # e.g. "SAP system" -> "SAP". A single-token node is allowed; a
+            # multi-token node must still have every token present in the
+            # candidate (true by subset).
+            overlap = len(node_set)
+            key = (overlap, len(node_name))
+        else:
+            # Overlapping but neither contains the other -> not specific enough.
+            continue
+
+        if key > best_key:
+            best_key = key
+            best = node_name
+    return best
 
 
 def _merge_version(node: GraphNode) -> str:

@@ -163,6 +163,84 @@ class IngestionSummary:
 
 
 @dataclass
+class JobStarted:
+    """Parsed 202 body of ``POST /documents`` (an accepted ingestion job)."""
+
+    job_id: str
+    status: str  # always "pending" at creation.
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> JobStarted:
+        return cls(
+            job_id=data.get("job_id") or "",
+            status=data.get("status") or "pending",
+        )
+
+
+@dataclass
+class JobStatus:
+    """Parsed ``GET /documents/jobs/{job_id}`` body."""
+
+    job_id: str
+    status: str  # "pending" | "running" | "succeeded" | "failed"
+    filename: str | None
+    doc_type: str | None
+    created_at: str | None
+    updated_at: str | None
+    summary: IngestionSummary | None
+    error: str | None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> JobStatus:
+        summary_data = data.get("summary")
+        return cls(
+            job_id=data.get("job_id") or "",
+            status=data.get("status") or "pending",
+            filename=data.get("filename"),
+            doc_type=data.get("doc_type"),
+            created_at=data.get("created_at"),
+            updated_at=data.get("updated_at"),
+            summary=IngestionSummary.from_dict(summary_data)
+            if isinstance(summary_data, dict)
+            else None,
+            error=data.get("error"),
+        )
+
+
+@dataclass
+class ResetStoreOutcome:
+    """Result of resetting a single store (mirrors the backend schema)."""
+
+    store: str  # "qdrant" | "neo4j"
+    status: str  # "reset" | "skipped"
+    detail: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> ResetStoreOutcome:
+        data = data or {}
+        return cls(
+            store=data.get("store") or "unknown",
+            status=data.get("status") or "skipped",
+            detail=data.get("detail"),
+        )
+
+
+@dataclass
+class ResetResult:
+    """Parsed ``POST /admin/reset`` body describing what was reset."""
+
+    scope: str  # "all" | "qdrant" | "neo4j"
+    results: list[ResetStoreOutcome]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ResetResult:
+        return cls(
+            scope=data.get("scope") or "all",
+            results=[ResetStoreOutcome.from_dict(r) for r in (data.get("results") or [])],
+        )
+
+
+@dataclass
 class ApiError:
     """A friendly, UI-renderable error. Never a raw traceback."""
 
@@ -178,6 +256,9 @@ class ApiError:
 # --------------------------------------------------------------------------- #
 
 _TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
+# Uploads can be large and the backend reads the whole file before responding,
+# so the start-ingestion call gets a more generous read/write budget.
+_UPLOAD_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=120.0, pool=10.0)
 
 
 class APIClient:
@@ -277,6 +358,87 @@ class APIClient:
             if body is None:
                 return ApiError(kind="parse", message="The backend returned an unreadable ingestion summary.")
             return IngestionSummary.from_dict(body)
+        return self._error_from_response(resp)
+
+    def start_ingestion(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        doc_type: str,
+        sop_version: str | None = None,
+        doc_title: str | None = None,
+        effective_date: str | None = None,
+    ) -> "JobStarted | ApiError":
+        """POST /documents (multipart). Returns the accepted job or an ApiError.
+
+        A 409 response (an ingestion is already running) is surfaced as an
+        ``ApiError(kind="http", http_status=409)`` with the backend message.
+        """
+        data: dict[str, str] = {"doc_type": doc_type}
+        if sop_version:
+            data["sop_version"] = sop_version
+        if doc_title:
+            data["doc_title"] = doc_title
+        if effective_date:
+            data["effective_date"] = effective_date
+        files = {"file": (filename, file_bytes)}
+        try:
+            resp = self._client.post(
+                "/documents", files=files, data=data, timeout=_UPLOAD_TIMEOUT
+            )
+        except httpx.TimeoutException:
+            return ApiError(
+                kind="timeout", message="The upload timed out while contacting the backend."
+            )
+        except httpx.RequestError as exc:
+            return ApiError(
+                kind="connection",
+                message=f"Could not reach the backend at {self.base_url}: {exc.__class__.__name__}.",
+            )
+        if resp.status_code == 202:
+            body = self._parse_json(resp)
+            if body is None:
+                return ApiError(kind="parse", message="The backend returned an unreadable response.")
+            return JobStarted.from_dict(body)
+        return self._error_from_response(resp)
+
+    def ingestion_job(self, job_id: str) -> "JobStatus | ApiError":
+        """GET /documents/jobs/{job_id}. Returns the job status or an ApiError."""
+        try:
+            resp = self._client.get(f"/documents/jobs/{job_id}")
+        except httpx.TimeoutException:
+            return ApiError(
+                kind="timeout", message="The backend timed out while reporting job status."
+            )
+        except httpx.RequestError as exc:
+            return ApiError(
+                kind="connection",
+                message=f"Could not reach the backend at {self.base_url}: {exc.__class__.__name__}.",
+            )
+        if resp.status_code == 200:
+            body = self._parse_json(resp)
+            if body is None:
+                return ApiError(kind="parse", message="The backend returned an unreadable job status.")
+            return JobStatus.from_dict(body)
+        return self._error_from_response(resp)
+
+    def reset_stores(self, scope: str, confirm: bool) -> "ResetResult | ApiError":
+        """POST /admin/reset. Returns the per-store outcome or an ApiError."""
+        payload = {"scope": scope, "confirm": confirm}
+        try:
+            resp = self._client.post("/admin/reset", json=payload)
+        except httpx.TimeoutException:
+            return ApiError(kind="timeout", message="The backend timed out while resetting stores.")
+        except httpx.RequestError as exc:
+            return ApiError(
+                kind="connection",
+                message=f"Could not reach the backend at {self.base_url}: {exc.__class__.__name__}.",
+            )
+        if resp.status_code == 200:
+            body = self._parse_json(resp)
+            if body is None:
+                return ApiError(kind="parse", message="The backend returned an unreadable reset result.")
+            return ResetResult.from_dict(body)
         return self._error_from_response(resp)
 
     # -- helpers ------------------------------------------------------------ #

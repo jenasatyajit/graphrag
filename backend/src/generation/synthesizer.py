@@ -189,10 +189,15 @@ class AnswerSynthesizer:
         # document (title/version) it was extracted from, when that chunk is in
         # the retrieved set, instead of a synthetic "Knowledge graph" label.
         chunk_lookup = {str(source.chunk.chunk_id): source for source in sources}
-        citable.extend(
-            CitableSource.from_graph_fact(fact, chunk_lookup=chunk_lookup)
-            for fact in (graph_facts or [])
-        )
+        dropped_graph_fact_count = 0
+        for fact in graph_facts or []:
+            graph_source = CitableSource.from_graph_fact(fact, chunk_lookup=chunk_lookup)
+            if graph_source is None:
+                # Un-resolvable graph fact (no retrieved chunk backs it): drop it
+                # rather than cite a misleading generic "Knowledge graph" source.
+                dropped_graph_fact_count += 1
+                continue
+            citable.append(graph_source)
         # External web results are numbered last so internal evidence keeps the
         # lowest (most prominent) markers.
         citable.extend(CitableSource.from_web(result) for result in (web_results or []))
@@ -224,6 +229,7 @@ class AnswerSynthesizer:
             "answer_synthesized",
             source_count=len(sources),
             graph_fact_count=len(graph_facts or []),
+            dropped_graph_fact_count=dropped_graph_fact_count,
             web_result_count=len(web_results or []),
             has_conversation_context=bool(conversation_context),
             citation_count=len(grounded.citations),

@@ -11,11 +11,11 @@ import streamlit as st
 
 from api_client import APIClient, ApiError
 from components.status import render_health_badge
-from views import chat, ingest_status, reports
+from views import admin, chat, ingest_status, reports
 
 st.set_page_config(page_title="GraphRAG", layout="wide")
 
-_PAGES = ["Chat", "Ingestion status", "Reports"]
+_PAGES = ["Chat", "Ingestion status", "Admin", "Reports"]
 
 
 def _sidebar(client: "APIClient | ApiError") -> str:
@@ -53,6 +53,8 @@ def main() -> None:
         chat.render(client)
     elif page == "Ingestion status":
         ingest_status.render(client)
+    elif page == "Admin":
+        admin.render(client)
 
 
 main()

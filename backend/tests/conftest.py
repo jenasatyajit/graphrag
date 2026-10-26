@@ -228,8 +228,9 @@ class FakeWebSearch:
         return WebSearchOutcome(query=query, results=list(self._results), failed=self._failed)
 
 
-def make_settings() -> Settings:
-    return Settings(_env_file=None, **settings_values())
+def make_settings(**overrides: Any) -> Settings:
+    values: dict[str, Any] = {**settings_values(), **overrides}
+    return Settings(_env_file=None, **values)
 
 
 def build_client(

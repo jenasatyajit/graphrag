@@ -97,17 +97,26 @@ class CitableSource(BaseModel):
         fact: GraphFact,
         *,
         chunk_lookup: dict[str, RetrievedChunk] | None = None,
-    ) -> CitableSource:
-        """Build a citable source from a graph fact.
+    ) -> CitableSource | None:
+        """Build a citable source from a graph fact, or ``None`` if unresolvable.
 
-        A graph fact is traceable to the chunk it was extracted from. When that
-        chunk is among the retrieved sources, resolve the citation's real
-        ``doc_title``/version/current-flag from it so a graph-derived claim cites
-        the actual document rather than a synthetic "Knowledge graph" label.
+        A graph fact is traceable to the chunk(s) it was extracted from. The
+        fact's ``chunk_ids`` are tried in order; the first one that is among the
+        retrieved sources resolves the citation's real ``doc_title``/version/
+        current-flag so a graph-derived claim cites the actual document.
+
+        When no chunk id resolves, the fact is **dropped** (``None``) rather than
+        cited with a synthetic "Knowledge graph" label: non-``Process`` graph
+        nodes store no ``doc_title``, so a generic label would be misleading
+        provenance and could trigger a spurious version warning. Dropping an
+        un-resolvable fact is preferred over a misleading generic citation.
         """
-        chunk_id = fact.chunk_ids[0] if fact.chunk_ids else None
-        source_chunk = chunk_lookup.get(chunk_id) if (chunk_lookup and chunk_id) else None
-        if source_chunk is not None:
+        if not chunk_lookup:
+            return None
+        for chunk_id in fact.chunk_ids:
+            source_chunk = chunk_lookup.get(chunk_id)
+            if source_chunk is None:
+                continue
             chunk = source_chunk.chunk
             return cls(
                 text=fact.as_text(),
@@ -117,14 +126,7 @@ class CitableSource(BaseModel):
                 is_current_version=chunk.is_current_version,
                 origin="graph_fact",
             )
-        return cls(
-            text=fact.as_text(),
-            doc_title="Knowledge graph",
-            chunk_id=chunk_id,
-            sop_version=None,
-            is_current_version=True,
-            origin="graph_fact",
-        )
+        return None
 
 
 class GroundedAnswer(BaseModel):

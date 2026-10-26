@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     llm_max_retries: int = Field(default=3, gt=0, le=10)
     ingestion_data_dir: Path = Path("data/raw")
     ingestion_summary_path: Path = Path("data/processed/last_ingestion.json")
+    # Per-job scratch directory for uploads accepted by POST /documents. Each
+    # ingestion job gets a subdirectory here; it is deleted when the job ends.
+    ingestion_upload_temp_dir: Path = Path("data/uploads")
+    # Maximum accepted upload size in bytes for POST /documents (default 50 MiB).
+    max_upload_bytes: int = Field(default=52_428_800, gt=0)
     # Phase 6 evaluation (RAGAS + ablation). The judge reuses sarvam_api_key and
     # talks to Sarvam's OpenAI-compatible endpoint; AnswerRelevancy embeddings
     # reuse the query-time embedding service. These are read only by the offline

@@ -118,9 +118,85 @@ def test_graph_fact_cites_real_document_when_chunk_known() -> None:
 
     citable = CitableSource.from_graph_fact(fact, chunk_lookup=lookup)
 
+    assert citable is not None
     assert citable.doc_title == "Refund SOP"
     assert citable.doc_title != "Knowledge graph"
     assert citable.sop_version == "v3.0"
+
+
+def test_graph_fact_resolves_when_match_is_not_first_chunk_id() -> None:
+    # The resolving chunk id is the SECOND one in the fact's chunk_ids, so this
+    # exercises the multi-id iteration (not just chunk_ids[0]).
+    from src.indexing.graph_schema import GraphFact
+
+    source = _source()
+    lookup = {str(source.chunk.chunk_id): source}
+    fact = GraphFact(
+        subject_name="Finance Approval",
+        relation="REQUIRES",
+        object_name="SAP",
+        chunk_ids=["unretrieved-chunk", str(source.chunk.chunk_id)],
+    )
+
+    citable = CitableSource.from_graph_fact(fact, chunk_lookup=lookup)
+
+    assert citable is not None
+    assert citable.chunk_id == str(source.chunk.chunk_id)
+    assert citable.doc_title == "Refund SOP"
+
+
+def test_unresolvable_graph_fact_is_dropped_not_labelled_knowledge_graph() -> None:
+    # None of the fact's chunk ids are in the retrieved set, so it must drop to
+    # None rather than emit a misleading synthetic "Knowledge graph" source.
+    from src.indexing.graph_schema import GraphFact
+
+    source = _source()
+    lookup = {str(source.chunk.chunk_id): source}
+    fact = GraphFact(
+        subject_name="Atlas 5000 Router",
+        relation="HAS_SPEC",
+        object_name="Throughput",
+        chunk_ids=["not-retrieved-1", "not-retrieved-2"],
+    )
+
+    assert CitableSource.from_graph_fact(fact, chunk_lookup=lookup) is None
+
+
+class GraphFactProvider:
+    """Cites both a real chunk [1] and (would-be) graph fact [2] if it survives."""
+
+    def __init__(self, answer: str) -> None:
+        self._answer = answer
+
+    async def complete(self, *, system_prompt: str, user_prompt: str) -> CompletionResult:
+        del system_prompt, user_prompt
+        return CompletionResult(text=self._answer)
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_graph_fact_adds_no_citation_and_no_version_warning() -> None:
+    # The only graph fact is un-resolvable, so it is dropped before synthesis:
+    # it produces no citation and, crucially, no spurious version warning. The
+    # retrieved chunk here is current, so version_warning must stay None.
+    from src.indexing.graph_schema import GraphFact
+
+    fact = GraphFact(
+        subject_name="Atlas 5000 Router",
+        relation="HAS_SPEC",
+        object_name="Throughput",
+        chunk_ids=["orphan-chunk"],
+    )
+    synthesizer = AnswerSynthesizer(GraphFactProvider("Refunds require manager approval [1]."))
+
+    grounded = await synthesizer.synthesize(
+        "Who approves refunds?",
+        [_source()],
+        graph_facts=[fact],
+    )
+
+    assert len(grounded.citations) == 1
+    assert all(c.reference.doc_title != "Knowledge graph" for c in grounded.citations)
+    assert grounded.version_warning is None
 
 
 class FakeCompletionProvider:

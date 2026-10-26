@@ -79,6 +79,51 @@ class IngestionSummary(BaseModel):
     completed_at: datetime
 
 
+JobStatusValue = Literal["pending", "running", "succeeded", "failed"]
+
+
+class JobStarted(BaseModel):
+    """202 response of ``POST /documents`` — the accepted ingestion job."""
+
+    job_id: str
+    status: JobStatusValue  # always "pending" at creation.
+
+
+class JobStatusResponse(BaseModel):
+    """``GET /documents/jobs/{job_id}`` response describing one ingestion job."""
+
+    job_id: str
+    status: JobStatusValue
+    filename: str | None = None
+    doc_type: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    summary: IngestionSummary | None = None  # present when status == "succeeded".
+    error: str | None = None  # present when status == "failed".
+
+
+class ResetRequest(BaseModel):
+    """Body of ``POST /admin/reset``; ``confirm`` must be true to proceed."""
+
+    scope: Literal["all", "qdrant", "neo4j"] = "all"
+    confirm: bool = False
+
+
+class ResetStoreOutcome(BaseModel):
+    """Result of resetting a single data store."""
+
+    store: Literal["qdrant", "neo4j"]
+    status: Literal["reset", "skipped"]
+    detail: str | None = None
+
+
+class ResetResponse(BaseModel):
+    """200 response of ``POST /admin/reset`` describing what was reset."""
+
+    scope: Literal["all", "qdrant", "neo4j"]
+    results: list[ResetStoreOutcome]
+
+
 class ErrorPayload(BaseModel):
     """Stable user-facing error payload."""
 

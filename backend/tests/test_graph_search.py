@@ -139,33 +139,58 @@ async def test_synthesizer_fuses_graph_facts_as_citable_sources() -> None:
         "Managers approve expenses [1]. Finance approval requires SAP [2]."
     )
     synthesizer = AnswerSynthesizer(provider)  # type: ignore[arg-type]
-    sources = [_retrieved(_chunk("01", "Managers approve expenses."))]
+    chunk = _chunk("01", "Managers approve expenses.")
+    sources = [_retrieved(chunk)]
+    # The graph fact is extracted from the retrieved chunk, so it resolves to the
+    # real source document rather than being dropped.
+    fact = GraphFact(
+        subject_name="Finance Approval",
+        relation="REQUIRES",
+        object_name="SAP",
+        chunk_ids=[str(chunk.chunk_id)],
+    )
 
     grounded = await synthesizer.synthesize(
         "How are expenses approved?",
         sources,
-        graph_facts=[_fact()],
+        graph_facts=[fact],
     )
 
     assert len(grounded.citations) == 2
     # The graph-fact citation resolves to the source chunk id (chunk-based).
     graph_citation = grounded.citations[1]
-    assert graph_citation.reference.chunk_id == "chunk-1"
+    assert graph_citation.reference.chunk_id == str(chunk.chunk_id)
 
 
-def test_graph_fact_without_chunk_still_grounds_but_has_no_chunk_id() -> None:
-    fact_source = CitableSource.from_graph_fact(
-        GraphFact(subject_name="A", relation="HAS_STEP", object_name="B", chunk_ids=[])
+def test_unresolvable_graph_fact_is_dropped() -> None:
+    # A graph fact with no chunk id (or whose chunk is not in the retrieved set)
+    # cannot resolve a real source document, so it is dropped rather than cited
+    # with a misleading generic "Knowledge graph" label.
+    chunkless = CitableSource.from_graph_fact(
+        GraphFact(subject_name="A", relation="HAS_STEP", object_name="B", chunk_ids=[]),
+        chunk_lookup={},
     )
-    grounded = ground_internal_answer("A has step B [1].", [fact_source])
-    assert len(grounded.citations) == 1
-    assert grounded.citations[0].reference.chunk_id is None
+    assert chunkless is None
+
+    unretrieved = CitableSource.from_graph_fact(
+        GraphFact(subject_name="A", relation="HAS_STEP", object_name="B", chunk_ids=["missing"]),
+        chunk_lookup={"other": _retrieved(_chunk("09", "Unrelated text."))},
+    )
+    assert unretrieved is None
+
+    # Grounding over an empty source list produces no citation and no crash.
+    grounded = ground_internal_answer("A has step B [1].", [])
+    assert grounded.citations == []
 
 
 def test_uncited_claim_is_dropped_even_with_graph_context() -> None:
     # This is the SPEC 6.3 hard rule: an uncited sentence never survives, and a
     # graph fact in context does not count as a citation for an unmarked claim.
-    fact_source = CitableSource.from_graph_fact(_fact())
+    fact_source = CitableSource.from_graph_fact(
+        _fact(),
+        chunk_lookup={"chunk-1": _retrieved(_chunk("01", "Finance approval requires SAP."))},
+    )
+    assert fact_source is not None
     grounded = ground_internal_answer(
         "Finance approval requires SAP.",  # no [n] marker
         [fact_source],

@@ -15,6 +15,7 @@ from src.agent.memory import ConversationStore, FollowUpRewriter, build_conversa
 from src.agent.router import AgentRouter, HybridRagService, IngestionStatusService
 from src.api.config import Settings
 from src.api.errors import RetrievalError, register_exception_handlers
+from src.api.jobs import JobStore
 from src.api.logging import configure_logging
 from src.api.middleware import RequestIdMiddleware
 from src.api.routes import router
@@ -156,6 +157,8 @@ def create_app(
             max_internal_sources=active_settings.rerank_top_n * 2,
         )
     app.state.ingestion_status = IngestionStatusService(active_settings.ingestion_summary_path)
+    # In-process ingestion job registry (jobs are lost on restart; see JobStore).
+    app.state.job_store = JobStore()
 
     app.add_middleware(
         CORSMiddleware,
